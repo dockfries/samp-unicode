@@ -1224,6 +1224,10 @@ static const char kMenuMask[32] = {
 };
 
 static void*         g_menuSelf = nullptr;   // CMenu last passed to CMenu::Show
+// The rectangle CMenu::Show laid the panel out in, in screen pixels. A row is only taken
+// when its pen falls inside this, so the HUD text the game keeps drawing while the menu is
+// up (money top right, clock and radio at the bottom) can never be caught.
+static RECT          g_menuPanel = { -1, -1, -1, -1 };
 static volatile DWORD g_menuUntil = 0;       // tick until which panel text counts as menu text
 static volatile LONG g_menuShowDepth = 0;
 static volatile LONG g_menuCallsInShow = 0;
@@ -1262,6 +1266,26 @@ static void __fastcall MenuShowDetour(void* self, void* unused)
     LONG before = g_menuCallsInShow;
     g_origMenuShow(self, unused);
     ::InterlockedDecrement(&g_menuShowDepth);
+
+    // packed CMenu: x +0x361, y +0x365, widths +0x369/+0x36D, columns +0x371
+    {
+        const BYTE* b = (const BYTE*)self;
+        const float mx   = *(const float*)(b + 0x361);
+        const float my   = *(const float*)(b + 0x365);
+        const float w0   = *(const float*)(b + 0x369);
+        const float w1   = *(const float*)(b + 0x36D);
+        const BYTE  cols = b[0x371];
+        const int   sw   = *(const int*)samp::kAddrScreenW;
+        const int   sh   = *(const int*)samp::kAddrScreenH;
+        if (sw > 0 && sh > 0 && mx > -100.0f && mx < 800.0f && my > -100.0f && my < 600.0f) {
+            const float kx = (float)sw / 640.0f, ky = (float)sh / 448.0f;
+            const float w  = w0 + (cols > 1 ? w1 : 0.0f);
+            g_menuPanel.left   = (LONG)((mx - 10.0f) * kx);
+            g_menuPanel.top    = (LONG)((my - 24.0f) * ky);
+            g_menuPanel.right  = (LONG)((mx + w + 14.0f) * kx);
+            g_menuPanel.bottom = (LONG)((my + 280.0f) * ky);
+        }
+    }
 
     if (g_cfg.menuEnabled) {
         wchar_t hex[48];
@@ -1555,8 +1579,13 @@ static void __cdecl PrintStringDetour(float x, float y, const char* text)
     // does for TextDraw and GameText. The window and font-state gates below still apply, so text
     // drawn while a menu happens to be open is not caught by this.
     const bool want = HasHighByte(text) || g_cfg.redrawAscii;
+    // A pen outside the panel CMenu::Show laid out is not a menu line. The HUD keeps drawing
+    // through this same font while a menu is open, and those strings have to stay put.
+    const bool inPanel = g_menuPanel.right > g_menuPanel.left &&
+                         x >= (float)g_menuPanel.left && x <= (float)g_menuPanel.right &&
+                         y >= (float)g_menuPanel.top && y <= (float)g_menuPanel.bottom;
     const bool inWindow = text && g_cfg.menuEnabled && g_textDrawDepth == 0 &&
-                          want && InMenuWindow(text);
+                          want && (InMenuObject(text) || (InMenuWindow(text) && inPanel));
     if (!inWindow) {
         if (!MenuWindowActive()) g_menuSigCount = 0;
         g_origPrintString(x, y, text);
