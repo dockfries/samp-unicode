@@ -477,8 +477,8 @@ static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass
         if (it.shadowSize > 0 || g_cfg.shadow) {
             int sx = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetX;
             int sy = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetY;
-            // A TextDraw's own shadow amount is in the same 640x480 space as its outline.
-            if (it.shadowSize > 0) {
+            // Only the client's own amount is in the 640x480 space; the [font] fallback is pixels.
+            if (it.shadowSize > 0 && it.stretchOutline) {
                 sx = StretchX(sx);
                 sy = StretchY(sy);
             }
@@ -496,8 +496,8 @@ static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass
                                              { 1, 0 },   { -1, 1 }, { 0, 1 },  { 1, 1 } };
             // The amount is in the client's 640x480 space, so it is stretched like GTA does it:
             // outline=1 is one pixel at 640x480 and four at 2560 wide.
-            const int ox = StretchX(it.outlineSize);
-            const int oy = StretchY(it.outlineSize);
+            const int ox = it.stretchOutline ? StretchX(it.outlineSize) : it.outlineSize;
+            const int oy = it.stretchOutline ? StretchY(it.outlineSize) : it.outlineSize;
             for (int i = 0; i < 8; i++)
                 quad(x + (float)(kDirs[i][0] * ox), y + (float)(kDirs[i][1] * oy), qw,
                      (float)h, it.color2);

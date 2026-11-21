@@ -441,6 +441,7 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
                 it.shadowColor = c2;
                 it.shadowSize  = shadowSize;
                 it.outlineSize = outlineSize;
+                it.stretchOutline = true;   // the client's own field, in its 640x480 space
                 it.scaleX  = sx;
                 if (line[i].symbol) {
                     // An inline arrow: the client's own sprite square, its own

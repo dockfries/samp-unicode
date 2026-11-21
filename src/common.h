@@ -216,6 +216,10 @@ struct DrawItem {
     D3DCOLOR shadowColor = 0xFF000000; // shadow, drawn under the outline
     int      shadowSize = 0;   // SA-MP shadow size in pixels (0 = off)
     int      outlineSize = 0;  // SA-MP outline thickness in pixels (0 = off)
+    // True when outlineSize/shadowSize came from the client's own field, which is in its
+    // 640x480 space and has to be stretched by the real screen. Menu and GameText widths
+    // are already device pixels and must not be.
+    bool     stretchOutline = false;
     int      shadowCopies = 0; // client text: glyph copies the client itself would draw
                                // (4 in a cross, 8 on a screen wider than 1280)
     bool     forceOpaque = false;  // client UI text: the client's own code ends with "| 0xff000000"
