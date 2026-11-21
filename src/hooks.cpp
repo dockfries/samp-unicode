@@ -2727,7 +2727,15 @@ static INT __stdcall WrapperTextBody(void* self, void* sprite, const char* text,
         // client re-renders once, and a time based window would still see the record left by
         // the previous frame and keep the shadow. Consuming it means a line that arrives
         // without a shadow in front of it has none here either.
-        if (age >= 0 && age <= 2 && ::strcmp(plain, g_lastShadowText) == 0) {
+        // The window used to be two calls, which only holds when the body follows the last
+        // shadow copy with nothing in between. A chat line draws four to eight of those copies,
+        // and the timestamp, another line or an F7 re-render between them pushed the body past
+        // the window: the line then got no outline here *and* the client's black copies stayed
+        // on screen, which is the dark double image. The text still has to match, so widening
+        // the call window (bounded in time) keeps the pairing exact and stops losing it.
+        const bool recent = age >= 0 && age <= 64 &&
+                            (::GetTickCount() - g_lastShadowTick) <= 200;
+        if (recent && ::strcmp(plain, g_lastShadowText) == 0) {
             outline = 1;
             chatLine = true;
             g_lastShadowText[0] = 0;
@@ -2735,7 +2743,7 @@ static INT __stdcall WrapperTextBody(void* self, void* sprite, const char* text,
             ConfirmShadowPasses(plain);
             LearnChatBodySite(g_wrapperRetRva);
         } else {
-            why = (age < 0 || age > 2) ? L"stale record" : L"no match";
+            why = (age < 0 || age > 64) ? L"stale record" : L"no match";
         }
     }
 
