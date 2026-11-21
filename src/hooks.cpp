@@ -593,7 +593,12 @@ static float ChatJoinAfterTimestamp(float x, long top, const std::wstring& piece
     const DWORD now = ::GetTickCount();
     const bool fresh = s_tail.tick != 0 && (now - s_tail.tick) < 120;
     float startX = x;
-    if (fresh && s_tail.timestamp && s_tail.top == top && x > s_tail.endX - 3.0f &&
+    // The timestamp is not the only prefix a line can have: the client draws "[hh:mm:ss] ",
+    // then the name with its colon, and only then the message, each as its own call. Requiring
+    // the previous piece to be the timestamp meant the message after a name kept the client's
+    // x - measured with Arial - so a wide gap opened between "name:" and the text. Being the
+    // next piece of the same line is the whole condition that matters.
+    if (fresh && s_tail.top == top && x > s_tail.endX - 3.0f &&
         x < s_tail.endX + 64.0f) {
         // The client puts the message at (timestamp width + 50) while its text starts at 45, so
         // the gap it draws is exactly five pixels (chatwindow.cpp:519). Our prefix is narrower
