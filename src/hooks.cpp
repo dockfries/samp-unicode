@@ -464,9 +464,10 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
             y += (float)lineH;
         }
 
-        LogDbg(L"redraw TextDraw: font=%u px=%d '%s' (chars=%d, letterH=%.2f) at=(%.1f,%.1f) scale=%.1fx%.1f color=%08X color2=%08X boxFlag=%d boxColor=%08X outline=%d shadow=%d",
+        LogDbg(L"redraw TextDraw: font=%u px=%d '%s' (chars=%d, letterH=%.2f) at=(%.1f,%.1f) center=%d right=%d scale=%.1fx%.1f color=%08X color2=%08X boxFlag=%d boxColor=%08X outline=%d shadow=%d",
                font, px, w.c_str(), (int)w.size(), letterH,
                *(float*)(obj + samp::kOffX), *(float*)(obj + samp::kOffY),
+               (int)center, (int)right,
                *(float*)(obj + samp::kOffBoxW), *(float*)(obj + samp::kOffBoxH),
                (unsigned)*(DWORD*)(obj + samp::kOffColor), (unsigned)*(DWORD*)(obj + samp::kOffColor2),
                (int)obj[samp::kOffBoxFlag], (unsigned)*(DWORD*)(obj + samp::kOffBoxColor),
@@ -1503,7 +1504,11 @@ bool MenuWindowActive()
 }
 static bool InMenuWindow(const char* text)
 {
-    return InMenuObject(text) || MenuWindowActive();
+    // Belonging to the menu object's own buffer is the one structural test that cannot
+    // be fooled: the string the game is about to draw is the menu's own. "A menu is open"
+    // is not enough - the HUD keeps drawing the money, the clock and the radio name through
+    // the same CFont while a menu is up, and those must stay where the game puts them.
+    return InMenuObject(text);
 }
 
 // While the window is open, only text drawn with the font state the menu itself
