@@ -579,54 +579,32 @@ bool ScoreboardUp()
 }
 
 
-// A chat line arrives as two calls: the client prints "[hh:mm:ss]" and then the message, placing the
-// message with Arial's advance for the prefix. This mod draws the prefix with whatever face was
-// configured, which is narrower than Arial, so the message's x lands past the end of our prefix and
-// leaves a gap. Pulling the message back to the prefix's end fixes that, but doing it for every
-// second call also swallowed the space in "Connected to~w~ open.mp", because a colour code splits a
-// sentence the same way. So the pull-back only happens when the previous piece was a timestamp.
-static float ChatJoinAfterTimestamp(float x, long top, const std::wstring& piece, int px, int fontId)
+// A chat line is drawn as several calls in a row: "[hh:mm:ss] ", the name with its colon, and
+// then the message. Each one after the first is positioned with Arial's advance for everything
+// before it, while this mod draws those prefixes with the configured face, which is narrower -
+// so every following piece lands past our end and leaves a gap. Pulling it back to the previous
+// piece's end closes that, and the three conditions below are what keep the pull-back to the
+// same line: the same row, less than 120 ms since the previous piece, and an x within 64 px of
+// where that piece ended. A colour code that splits a sentence also lands there, but its space
+// is part of the piece and the client put it within a few pixels, so nothing is swallowed.
+static float ChatJoinNextPiece(float x, long top, const std::wstring& piece, int px, int fontId)
 {
-    struct Tail { long top; float endX; DWORD tick; bool timestamp; };
-    static Tail s_tail = { 0, 0.0f, 0, false };
+    struct Tail { long top; float endX; DWORD tick; };
+    static Tail s_tail = { 0, 0.0f, 0 };
 
     const DWORD now = ::GetTickCount();
     const bool fresh = s_tail.tick != 0 && (now - s_tail.tick) < 120;
     float startX = x;
-    // The timestamp is not the only prefix a line can have: the client draws "[hh:mm:ss] ",
-    // then the name with its colon, and only then the message, each as its own call. Requiring
-    // the previous piece to be the timestamp meant the message after a name kept the client's
-    // x - measured with Arial - so a wide gap opened between "name:" and the text. Being the
-    // next piece of the same line is the whole condition that matters.
-    if (fresh && s_tail.top == top && x > s_tail.endX - 3.0f &&
-        x < s_tail.endX + 64.0f) {
-        // The client puts the message at (timestamp width + 50) while its text starts at 45, so
-        // the gap it draws is exactly five pixels (chatwindow.cpp:519). Our prefix is narrower
-        // than the Arial width that was measured for it, so joining to the end and adding five
-        // reproduces the spacing the client intended.
+    if (fresh && s_tail.top == top && x > s_tail.endX - 3.0f && x < s_tail.endX + 64.0f) {
+        // The client puts a following piece at (prefix width + 50) while the text starts at 45,
+        // so the gap it draws is five pixels (chatwindow.cpp:519). Joining to our own end and
+        // adding those five reproduces the spacing the client intended.
         startX = s_tail.endX + 5.0f;
     }
 
-    // A prefix is "[dd:dd:dd]" or "[dd:dd:dd] " - ten characters plus an optional space.
-    bool stamp = piece.size() >= 10 && piece[0] == L'[' && piece[9] == L']';
-    if (stamp) {
-        for (int i = 1; i < 9 && stamp; i++) {
-            const wchar_t c = piece[(size_t)i];
-            if (i % 3 == 0) { if (c != L':') stamp = false; }
-            else if (c < L'0' || c > L'9') stamp = false;
-        }
-    }
-
-    if (!piece.empty() && !stamp) {
+    if (!piece.empty()) {
         s_tail.tick = now;
         s_tail.top = top;
-        s_tail.timestamp = false;
-        const int adv = MeasureTextWidth(piece, px, fontId);
-        s_tail.endX = startX + (float)(adv > 0 ? adv : 0);
-    } else if (stamp) {
-        s_tail.tick = now;
-        s_tail.top = top;
-        s_tail.timestamp = true;
         const int adv = MeasureTextWidth(piece, px, fontId);
         s_tail.endX = startX + (float)(adv > 0 ? adv : 0);
     }
@@ -3650,7 +3628,7 @@ static void TakeOverClientText(int which, void* self, void* sprite, const char* 
             // join used to exist. It cannot be applied to every piece: a colour code in the middle
             // of a sentence also arrives as a second call, and pulling that one back ate the space
             // ("Connected toopen.mp"). Only a timestamp-shaped prefix gets joined.
-            it.x           = ChatJoinAfterTimestamp((float)l, t + (long)(line * lineH),
+            it.x           = ChatJoinNextPiece((float)l, t + (long)(line * lineH),
                                                     runs[ri].text, px, g_cfg.clientTextChatFont);
             // The cell this renderer produces carries more space below the ink than the
             // client's does, so a line centred by its cell sits low. Lift the ink a little.
