@@ -2189,25 +2189,18 @@ static DWORD g_chatBodySites[8] = { 0 };
 static int   g_chatBodySiteCount = 0;
 
 // ---------------------------------------------------------------------------
-// The learned sites outlive the process
+// Call sites, per client build
 //
-// Learning costs one line: the chat surface is only repainted when it changes, so the
-// frame that learned the sites stays on screen with the client's copies beside this mod's
-// glyphs until the next message. Writing the sites next to the ini, keyed on the client
-// build, turns that into a once-per-build cost instead of a once-per-session one.
-// ---------------------------------------------------------------------------
-static std::wstring LearnedSitesPath()
-{
-    return g_gameDir + g_pluginStem + L".sites";
-}
-
-// The sites of every client the launcher ships, measured in one pass over its samp folder
-// (start each build once, then read the .sites file it wrote). A chat line is painted by
-// eight call sites - the eight shadow copies - and one body call, and every build has its
-// own addresses, so the table is keyed on the client's link time and file size rather than
-// on a version number. A build that is not here learns its own sites and writes them to the
-// file next to the ini; this table simply saves that one run for the seven that were
-// measured.
+// The client paints a chat line by calling its font eight times at eight sites - the black
+// copies - and once at a ninth, the body. Dropping the copies means recognising those sites,
+// and every build has its own addresses, so they are keyed on the client's link time and file
+// size rather than a version number.
+//
+// The seven clients the launcher ships are measured and listed here, which is what makes the
+// first chat line after joining clean. Anything else learns its own sites from that line: the
+// copies stay beside this mod's glyphs until the line is repainted, and from then on the build
+// behaves like a measured one. Nothing is cached on disk, because the game folder sits under
+// Program Files and the write would be refused.
 struct KnownBuildSites { DWORD stamp; DWORD size; const char* shadow; const char* chat; };
 static const KnownBuildSites kKnownBuildSites[] = {
     { 0x5542F47A, 2199552, "63967,639A4,639D5,63A18,63A55,63A86,63AC9,63B02", "63BEA" },  // 0.3.7-R1
@@ -2257,154 +2250,27 @@ static bool ClientBuildKey(DWORD* stamp, DWORD* size)
 // One line per client build, so a single pass over the launcher's folder fills the table:
 //   build <pe-timestamp> <file-size> shadow <rva,rva,...> chat <rva,...>
 // A line for another build is kept, and the line for this build is replaced on every save.
-static bool ReadWholeFile(const std::wstring& path, std::string* out)
-{
-    HANDLE f = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                             OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
-    char buf[8192] = { 0 };
-    DWORD got = 0;
-    ::ReadFile(f, buf, sizeof(buf) - 1, &got, nullptr);
-    ::CloseHandle(f);
-    if (out) out->assign(buf, got);
-    return got != 0;
-}
-
-static bool WriteWholeFile(const std::wstring& path, const std::string& data)
-{
-    HANDLE f = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                             FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (f == INVALID_HANDLE_VALUE) return false;
-    DWORD wrote = 0;
-    ::WriteFile(f, data.data(), (DWORD)data.size(), &wrote, nullptr);
-    ::CloseHandle(f);
-    return wrote == (DWORD)data.size();
-}
-
-static std::string SitesLine(DWORD stamp, DWORD size)
-{
-    char buf[512];
-    int n = _snprintf_s(buf, sizeof(buf), _TRUNCATE, "build %08X %u shadow ", (unsigned)stamp,
-                        (unsigned)size);
-    if (n < 0) return std::string();
-    std::string line(buf, (size_t)n);
-    for (int i = 0; i < g_shadowSiteCount; i++) {
-        n = _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%s%X", i ? "," : "",
-                        (unsigned)g_shadowSites[i]);
-        if (n > 0) line.append(buf, (size_t)n);
-    }
-    line += " chat ";
-    for (int i = 0; i < g_chatBodySiteCount; i++) {
-        n = _snprintf_s(buf, sizeof(buf), _TRUNCATE, "%s%X", i ? "," : "",
-                        (unsigned)g_chatBodySites[i]);
-        if (n > 0) line.append(buf, (size_t)n);
-    }
-    line += "\r\n";
-    return line;
-}
-
-static void SaveLearnedSites()
+// Fill the site table for the client that is loaded, from the measured builds below. There is
+// no on-disk cache: the seven clients the launcher ships are all in the table, and anything else
+// learns its own sites on its first line (see LearnShadowSite) - a cost of one line per launch,
+// which a file next to the executable cannot be relied on to remove (the game folder is under
+// Program Files, so the write is refused).
+void SeedKnownBuildSites()
 {
     DWORD stamp = 0, size = 0;
     if (!ClientBuildKey(&stamp, &size)) return;
 
-    // Everything already learned for the other builds is kept: cycling through the
-    // launcher's folder builds the whole table in one pass.
-    std::string all;
-    ReadWholeFile(LearnedSitesPath(), &all);
-    std::string keep;
-    for (size_t pos = 0; pos < all.size(); ) {
-        size_t eol = all.find('\n', pos);
-        if (eol == std::string::npos) eol = all.size();
-        std::string line = all.substr(pos, eol - pos);
-        pos = eol + 1;
-        unsigned s = 0, z = 0;
-        if (line.rfind("build ", 0) == 0 && ::sscanf_s(line.c_str(), "build %x %u", &s, &z) == 2 &&
-            s == stamp && z == size) {
-            continue;                       // superseded by the line written below
-        }
-        keep += line;
-        keep += "\r\n";
-    }
-    keep += SitesLine(stamp, size);
-    WriteWholeFile(LearnedSitesPath(), keep);
-}
-
-void LoadLearnedSites()
-{
-    DWORD stamp = 0, size = 0;
-    if (!ClientBuildKey(&stamp, &size)) return;
-
-    std::string all;
-    if (!ReadWholeFile(LearnedSitesPath(), &all)) return;
-
-    // Find this build's line; a file that has none simply means this build is new.
-    std::string line;
-    for (size_t pos = 0; pos < all.size(); ) {
-        size_t eol = all.find('\n', pos);
-        if (eol == std::string::npos) eol = all.size();
-        std::string one = all.substr(pos, eol - pos);
-        pos = eol + 1;
-        unsigned s = 0, z = 0;
-        if (one.rfind("build ", 0) == 0 && ::sscanf_s(one.c_str(), "build %x %u", &s, &z) == 2 &&
-            s == stamp && z == size) {
-            line = one;
-            break;
-        }
-    }
-    // The seven clients the launcher ships are measured and listed above; seeding them
-    // means a fresh install is correct on its first frame, on any machine.
-    int shadows = 0, bodies = 0;
     for (size_t i = 0; i < _countof(kKnownBuildSites); i++) {
         const KnownBuildSites& k = kKnownBuildSites[i];
         if (k.stamp != stamp || k.size != size) continue;
-        shadows = ParseSiteList(k.shadow, g_shadowSites, shadows, 12);
-        bodies  = ParseSiteList(k.chat, g_chatBodySites, bodies, 8);
-        LogW(L"sites: this client build is one of the measured ones");
-        break;
-    }
-
-    // The globals are what ShadowSiteKnown()/ChatBodySiteKnown() walk, and ParseSiteList only
-    // advanced these locals - so every seeded site was written into the arrays and then never
-    // looked at. Both counts are published here and again after the file's line is read.
-    g_shadowSiteCount  = shadows;
-    g_chatBodySiteCount = bodies;
-
-    if (line.empty()) {
-        if (!shadows && !bodies)
-            LogW(L"sites: this client build is new, its sites are learned on the first line");
+        g_shadowSiteCount   = ParseSiteList(k.shadow, g_shadowSites, 0, 12);
+        g_chatBodySiteCount = ParseSiteList(k.chat, g_chatBodySites, 0, 8);
+        LogW(L"sites: measured build %08X/%u, %d shadow and %d chat body site(s) seeded",
+             (unsigned)stamp, (unsigned)size, g_shadowSiteCount, g_chatBodySiteCount);
         return;
     }
-
-    const char* sh = ::strstr(line.c_str(), " shadow ");
-    const char* ch = ::strstr(line.c_str(), " chat ");
-    if (sh) {
-        char csv[512];
-        const char* endp = ch ? ch : sh + 8 + ::strlen(sh + 8);
-        size_t len = (size_t)(endp - (sh + 8));
-        if (len >= sizeof(csv)) len = sizeof(csv) - 1;
-        ::memcpy(csv, sh + 8, len);
-        csv[len] = 0;
-        shadows = ParseSiteList(csv, g_shadowSites, shadows, 12);
-    }
-    if (ch) {
-        char csv[256];
-        const char* p = ch + 6;
-        size_t len = ::strlen(p);
-        while (len && (p[len - 1] == '\r' || p[len - 1] == '\n' || p[len - 1] == ' ')) len--;
-        if (len >= sizeof(csv)) len = sizeof(csv) - 1;
-        ::memcpy(csv, p, len);
-        csv[len] = 0;
-        bodies = ParseSiteList(csv, g_chatBodySites, bodies, 8);
-    }
-    g_shadowSiteCount  = shadows;
-    g_chatBodySiteCount = bodies;
-
-    LogW(L"sites: %d shadow, %d chat body site(s) known for this client build (key %08X/%u, "
-         L"first shadow=%X, first chat=%X)",
-         shadows, bodies, (unsigned)stamp, (unsigned)size,
-         (unsigned)(g_shadowSiteCount ? g_shadowSites[0] : 0),
-         (unsigned)(g_chatBodySiteCount ? g_chatBodySites[0] : 0));
+    LogW(L"sites: build %08X/%u is not one of the measured ones, its chat sites are learned "
+         L"from the first line", (unsigned)stamp, (unsigned)size);
 }
 
 static bool ChatBodySiteKnown(DWORD rva)
@@ -2420,7 +2286,6 @@ static void LearnChatBodySite(DWORD rva)
         return;
     g_chatBodySites[g_chatBodySiteCount++] = rva;
     LogW(L"chat body site learned: +0x%X (%d known)", (unsigned)rva, g_chatBodySiteCount);
-    SaveLearnedSites();
 }
 
 static bool ShadowSiteKnown(DWORD rva)
@@ -2436,7 +2301,6 @@ static void LearnShadowSite(DWORD rva)
     g_shadowSites[g_shadowSiteCount++] = rva;
     LogW(L"shadow site learned: +0x%X (%d known, first=%X)", (unsigned)rva, g_shadowSiteCount,
          (unsigned)g_shadowSites[0]);
-    SaveLearnedSites();
 }
 
 static void RememberShadowPass(const void* font, DWORD rva, const char* text)

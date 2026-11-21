@@ -206,7 +206,7 @@ static bool TryAttachSamp()
         // The chat and death-window decisions are keyed on callers measured per build; a
         // build with no measured window gets none and keeps its own shadows and text.
         SelectClientCallerWindows(v[0], v[1], v[2]);
-        LoadLearnedSites();
+        SeedKnownBuildSites();
         if (!desc.empty()) LogW(L"samp.dll description: %s", desc.c_str());
     } else {
         LogW(L"cannot read samp.dll version info");

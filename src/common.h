@@ -388,7 +388,7 @@ void FontsUnload();    // undo every AddFontResourceExW
 bool HookMenu();
 bool HookPrintString();
 void SelectClientCallerWindows(unsigned v0, unsigned v1, unsigned v2);  // per build, see hooks.cpp
-void LoadLearnedSites();           // shadow / chat-body call sites learned on this build before
+void SeedKnownBuildSites();        // measured shadow / chat-body call sites for this client build
 bool HookClientText();            // CFonts::DrawText / DrawLittleText (0.3.DL)
 bool ClientTextWanted(const char* text, int len);   // does this line need this mod's font?
 void UnhookClientText();
