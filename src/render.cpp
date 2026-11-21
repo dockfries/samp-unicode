@@ -394,8 +394,11 @@ static void SetupState(IDirect3DDevice9* dev)
 // screen is kept here and the TextDraw/GameText offsets are scaled the same way.
 static int g_stretchW = 640;
 static int g_stretchH = 480;
-static int StretchX(int n) { const int v = (int)((float)n * (float)g_stretchW / 640.0f + 0.5f); return v < 1 ? 1 : (v > 32 ? 32 : v); }
-static int StretchY(int n) { const int v = (int)((float)n * (float)g_stretchH / 480.0f + 0.5f); return v < 1 ? 1 : (v > 32 ? 32 : v); }
+// GTA's own scaling: SCREEN_STRETCH_X divides by 640 and SCREEN_STRETCH_Y by 448
+// (gta-reversed source/game_sa/common.h DEFAULT_SCREEN_WIDTH/HEIGHT) and neither is bounded -
+// the field is a byte, so 255 really is 1020 px at 2560 wide, and that is what the client draws.
+static int StretchX(int n) { const int v = (int)((float)n * (float)g_stretchW / 640.0f + 0.5f); return v < 1 ? 1 : v; }
+static int StretchY(int n) { const int v = (int)((float)n * (float)g_stretchH / 448.0f + 0.5f); return v < 1 ? 1 : v; }
 
 static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass)
 {
@@ -468,13 +471,17 @@ static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass
     // glyph of the run before it. Mixed Latin/CJK lines are split into many runs,
     // so that used to eat up to 2*outlineSize pixels of the previous run.
     if (!bodyPass) {
-        // Shadow first: the shadow and the outline are the same colour, so an
-        // offset smaller than the outline width disappears inside it. Drawing
-        // the shadow underneath keeps that from happening.
+        // The client draws an outline *or* a shadow, never both: textdraw.cpp:219 is
+        // "if (outline) SetOutline else SetShadow", and GTA's PrintString only runs the
+        // outline branch while DropAmount is zero. An item with an outline therefore gets no
+        // shadow - which is also why the shadow offset can sit inside the outline.
         //
-        // The TextDraw's own shadow size wins; [font] shadow / shadow_offset
-        // is the fallback for every item that does not ask for one.
-        if (it.shadowSize > 0 || g_cfg.shadow) {
+        // A TextDraw has a shadow only when the server asked for one. [font] shadow is the
+        // fallback for the surfaces this mod lays out itself (GameText), not for a TextDraw
+        // the client would have drawn bare.
+        const bool hasOutline = it.outlineSize > 0;
+        const bool wantShadow = it.shadowSize > 0 || (g_cfg.shadow && !it.isTextDraw);
+        if (!hasOutline && wantShadow) {
             int sx = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetX;
             int sy = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetY;
             // Only the client's own amount is in the 640x480 space; the [font] fallback is pixels.

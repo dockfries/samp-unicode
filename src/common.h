@@ -220,6 +220,10 @@ struct DrawItem {
     // 640x480 space and has to be stretched by the real screen. Menu and GameText widths
     // are already device pixels and must not be.
     bool     stretchOutline = false;
+    // True for items that came from a TextDraw object. Their outline/shadow fields are the
+    // client's own, so they are stretched by the screen, and the [font] shadow fallback must
+    // not apply to them: the client draws a shadow only when the server asked for one.
+    bool     isTextDraw = false;
     int      shadowCopies = 0; // client text: glyph copies the client itself would draw
                                // (4 in a cross, 8 on a screen wider than 1280)
     bool     forceOpaque = false;  // client UI text: the client's own code ends with "| 0xff000000"

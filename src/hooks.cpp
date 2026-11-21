@@ -334,18 +334,12 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
 
         D3DCOLOR c1 = SwapRB(hlFlag ? hlColor : *(DWORD*)(obj + samp::kOffColor));
         D3DCOLOR c2 = SwapRB(*(DWORD*)(obj + samp::kOffColor2));
-        // Signed read: the client keeps -1 in these fields for "not set", and reading the byte
-        // unsigned turns that into 255. A 255-pixel outline is 255 rings x 8 quads per run, which
-        // is ~2000 quads per TextDraw (35 of them made a frame take a second) and spreads a black
-        // halo hundreds of pixels wide over the screen. Out of range therefore means "not set".
-        int  shadowSize  = (int)(signed char)obj[samp::kOffFlagShadow];
-        int  outlineSize = (int)(signed char)obj[samp::kOffFlagOutline];
-        // Keep the client's values as they are: 0xFF is a real 255 in this field (the server sends
-        // -1 for "not set" and the client stores the byte), and the client passes it straight to
-        // GTA, which draws eight offsets that far apart in the drop colour. Only a negative value
-        // is impossible here and becomes 0.
-        if (shadowSize  < 0) shadowSize  = 0;
-        if (outlineSize < 0) outlineSize = 0;
+        // Both fields are uint8 in the client: CFont::SetEdge takes an int8 but stores it in a
+        // uint8 EdgeAmount (gta-reversed source/game_sa/FontSpecifiers.h) and SetDropShadowPosition
+        // takes a uint8, so a byte of 0xFF reaches GTA as 255 and its eight copies land
+        // 255 * screen/640 away. Reading them unsigned is what the client does; nothing is clamped.
+        int  shadowSize  = (int)obj[samp::kOffFlagShadow];
+        int  outlineSize = (int)obj[samp::kOffFlagOutline];
         if (!g_cfg.shadow) shadowSize = 0;
         bool center  = *(BYTE*)(obj + samp::kOffFlagCenter) != 0;
         bool right   = *(BYTE*)(obj + samp::kOffFlagRight) != 0;
@@ -442,6 +436,7 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
                 it.shadowSize  = shadowSize;
                 it.outlineSize = outlineSize;
                 it.stretchOutline = true;   // the client's own field, in its 640x480 space
+                it.isTextDraw = true;
                 it.scaleX  = sx;
                 if (line[i].symbol) {
                     // An inline arrow: the client's own sprite square, its own
