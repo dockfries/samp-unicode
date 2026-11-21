@@ -364,6 +364,10 @@ void ClearGameTextAll();              // drop everything we show (new message re
 bool IsGameTextText(const std::wstring& s);   // already drawn by the GameText path
 void NoteMenuDraw(float x, float y, int px);  // remember what the menu path drew
 bool IsMenuDuplicate(float x, float y, int px);
+// The menu title reaches the screen twice (the menu's own encoder and a TextDraw). These carry
+// the title text so that second copy is dropped from the first frame on.
+void NoteMenuTitle(const std::wstring& text);
+bool IsMenuTitleText(const std::wstring& text);
 void NoteMenuFrame();                 // the menu drew a line this frame
 bool MenuDrawnThisFrame();            // consumes that flag
 int  GameTextStyleCount();          // styles with a built-in layout (0..N-1)

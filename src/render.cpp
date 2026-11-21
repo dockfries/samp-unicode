@@ -92,6 +92,33 @@ void NoteMenuDraw(float x, float y, int px)
     ListUnlock();
 }
 
+// The menu title's text, so the client's TextDraw copy of it can be dropped before the
+// position note exists (see MenuNoteTitle). One menu at a time, so one entry is enough.
+static std::wstring g_menuTitleText;
+static DWORD        g_menuTitleTick = 0;
+
+void NoteMenuTitle(const std::wstring& text)
+{
+    if (text.empty()) return;
+    ListLock();
+    g_menuTitleText = text;
+    g_menuTitleTick = ::GetTickCount();
+    ListUnlock();
+}
+
+bool IsMenuTitleText(const std::wstring& text)
+{
+    if (text.empty()) return false;
+    bool hit = false;
+    ListLock();
+    if (!g_menuTitleText.empty() && g_menuTitleText == text &&
+        (::GetTickCount() - g_menuTitleTick) <= 500) {
+        hit = true;
+    }
+    ListUnlock();
+    return hit;
+}
+
 bool IsMenuDuplicate(float x, float y, int px)
 {
     bool hit = false;

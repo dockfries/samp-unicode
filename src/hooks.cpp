@@ -290,6 +290,18 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
     }
 
     std::wstring w = ToWide(text, len);
+
+    // The menu title arrives twice: CMenu draws it through its own encoder and the client also
+    // hands the same string to a TextDraw. Both are visible, and the TextDraw copy sits where
+    // the draw says - the title visibly jumps right for a frame while a menu opens. Matching
+    // the menu's own title is what removes that copy from the very first frame: the client still
+    // has to run (its text lengths drive the menu's own layout), so it is told to draw the copy
+    // fully transparent instead of being skipped.
+    if (g_cfg.menuEnabled && MenuWindowActive() && IsMenuTitleText(w)) {
+        HideTextAndCallOriginal(self, obj);
+        return;
+    }
+
     if (w.empty()) { CallOriginalTextDraw(self); return; }
 
     // The client also renders the GameText through a TextDraw. We draw that string
@@ -1256,35 +1268,59 @@ static const char kShowMask[12] = {
     'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x', 'x',
 };
 
+// packed CMenu: x +0x361, y +0x365, widths +0x369/+0x36D, columns +0x371
+static void MenuComputePanel(void* self)
+{
+    if (!self) return;
+    const BYTE* b = (const BYTE*)self;
+    const float mx   = *(const float*)(b + 0x361);
+    const float my   = *(const float*)(b + 0x365);
+    const float w0   = *(const float*)(b + 0x369);
+    const float w1   = *(const float*)(b + 0x36D);
+    const BYTE  cols = b[0x371];
+    const int   sw   = *(const int*)samp::kAddrScreenW;
+    const int   sh   = *(const int*)samp::kAddrScreenH;
+    if (sw <= 0 || sh <= 0) return;
+    if (!(mx > -100.0f && mx < 800.0f && my > -100.0f && my < 600.0f)) return;
+    const float kx = (float)sw / 640.0f, ky = (float)sh / 448.0f;
+    const float w  = w0 + (cols > 1 ? w1 : 0.0f);
+    g_menuPanel.left   = (LONG)((mx - 10.0f) * kx);
+    g_menuPanel.top    = (LONG)((my - 24.0f) * ky);
+    g_menuPanel.right  = (LONG)((mx + w + 14.0f) * kx);
+    g_menuPanel.bottom = (LONG)((my + 280.0f) * ky);
+}
+
+// The title also reaches the screen as a TextDraw. Note its text so that copy is dropped from
+// the first frame, before any position note exists.
+static void MenuNoteTitle(void* self)
+{
+    if (!self) return;
+    const char* title = (const char*)self + 1;      // CMenu::m_szTitle
+    const int n = (int)::strnlen(title, 32);
+    if (n <= 0) return;
+    NoteMenuTitle(ToWide(title, n));
+}
+
 static void __fastcall MenuShowDetour(void* self, void* unused)
 {
     if (!g_origMenuShow) return;           // hook installed without a trampoline
     g_menuSelf = self;                     // the CMenu the game is drawing now
     g_menuUntil = ::GetTickCount() + 3000;
+
+    // The panel rectangle has to be known *before* the original runs: Show() is what draws the
+    // title and the rows, so computing it afterwards left the first frame of every menu with a
+    // stale (or unset) rectangle and its rows were rejected.
+    MenuComputePanel(self);
+
+    // The title is drawn twice: once through the menu's own encoder and once as a TextDraw.
+    // The position note that suppresses the second copy only exists after the first frame, so
+    // register the title now and the TextDraw copy is skipped from the very first frame.
+    MenuNoteTitle(self);
+
     ::InterlockedIncrement(&g_menuShowDepth);
     LONG before = g_menuCallsInShow;
     g_origMenuShow(self, unused);
     ::InterlockedDecrement(&g_menuShowDepth);
-
-    // packed CMenu: x +0x361, y +0x365, widths +0x369/+0x36D, columns +0x371
-    {
-        const BYTE* b = (const BYTE*)self;
-        const float mx   = *(const float*)(b + 0x361);
-        const float my   = *(const float*)(b + 0x365);
-        const float w0   = *(const float*)(b + 0x369);
-        const float w1   = *(const float*)(b + 0x36D);
-        const BYTE  cols = b[0x371];
-        const int   sw   = *(const int*)samp::kAddrScreenW;
-        const int   sh   = *(const int*)samp::kAddrScreenH;
-        if (sw > 0 && sh > 0 && mx > -100.0f && mx < 800.0f && my > -100.0f && my < 600.0f) {
-            const float kx = (float)sw / 640.0f, ky = (float)sh / 448.0f;
-            const float w  = w0 + (cols > 1 ? w1 : 0.0f);
-            g_menuPanel.left   = (LONG)((mx - 10.0f) * kx);
-            g_menuPanel.top    = (LONG)((my - 24.0f) * ky);
-            g_menuPanel.right  = (LONG)((mx + w + 14.0f) * kx);
-            g_menuPanel.bottom = (LONG)((my + 280.0f) * ky);
-        }
-    }
 
     if (g_cfg.menuEnabled) {
         wchar_t hex[48];
