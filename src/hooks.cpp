@@ -579,23 +579,32 @@ bool ScoreboardUp()
 }
 
 
-// A chat line is drawn as several calls in a row: "[hh:mm:ss] ", the name with its colon, and
-// then the message. Each one after the first is positioned with Arial's advance for everything
-// before it, while this mod draws those prefixes with the configured face, which is narrower -
-// so every following piece lands past our end and leaves a gap. Pulling it back to the previous
-// piece's end closes that, and the three conditions below are what keep the pull-back to the
-// same line: the same row, less than 120 ms since the previous piece, and an x within 64 px of
-// where that piece ended. A colour code that splits a sentence also lands there, but its space
-// is part of the piece and the client put it within a few pixels, so nothing is swallowed.
+// The client draws a chat line in pieces, each positioned with Arial's advance for everything
+// before it: "[hh:mm:ss] ", then "Name:", then the message. Our face is narrower, so every
+// following piece lands past our own end and a gap opens. Pulling it back to the previous
+// piece's end closes that, but only for a piece that *continues a chat line*: the TAB
+// scoreboard also draws its column headers as separate calls on one row, and joining those
+// glued "id" to "name". So the previous piece has to look like one of the two chat prefixes -
+// a timestamp bracket or a name with its colon - and not like a column header.
+static bool LooksLikeChatPrefix(const std::wstring& s)
+{
+    size_t n = s.size();
+    while (n > 0 && s[n - 1] == L' ') n--;
+    if (n == 0) return false;
+    const wchar_t last = s[n - 1];
+    return last == L':' || last == L']';
+}
+
 static float ChatJoinNextPiece(float x, long top, const std::wstring& piece, int px, int fontId)
 {
-    struct Tail { long top; float endX; DWORD tick; };
-    static Tail s_tail = { 0, 0.0f, 0 };
+    struct Tail { long top; float endX; DWORD tick; bool prefix; };
+    static Tail s_tail = { 0, 0.0f, 0, false };
 
     const DWORD now = ::GetTickCount();
     const bool fresh = s_tail.tick != 0 && (now - s_tail.tick) < 120;
     float startX = x;
-    if (fresh && s_tail.top == top && x > s_tail.endX - 3.0f && x < s_tail.endX + 64.0f) {
+    if (fresh && s_tail.prefix && s_tail.top == top && x > s_tail.endX - 3.0f &&
+        x < s_tail.endX + 64.0f) {
         // The client puts a following piece at (prefix width + 50) while the text starts at 45,
         // so the gap it draws is five pixels (chatwindow.cpp:519). Joining to our own end and
         // adding those five reproduces the spacing the client intended.
@@ -605,6 +614,7 @@ static float ChatJoinNextPiece(float x, long top, const std::wstring& piece, int
     if (!piece.empty()) {
         s_tail.tick = now;
         s_tail.top = top;
+        s_tail.prefix = LooksLikeChatPrefix(piece);
         const int adv = MeasureTextWidth(piece, px, fontId);
         s_tail.endX = startX + (float)(adv > 0 ? adv : 0);
     }
