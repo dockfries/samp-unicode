@@ -474,17 +474,20 @@ static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass
     // glyph of the run before it. Mixed Latin/CJK lines are split into many runs,
     // so that used to eat up to 2*outlineSize pixels of the previous run.
     if (!bodyPass) {
-        // The client draws an outline *or* a shadow, never both: textdraw.cpp:219 is
-        // "if (outline) SetOutline else SetShadow", and GTA's PrintString only runs the
-        // outline branch while DropAmount is zero. An item with an outline therefore gets no
-        // shadow - which is also why the shadow offset can sit inside the outline.
+        // For a TextDraw the client draws an outline *or* a shadow, never both:
+        // textdraw.cpp:219 is "if (outline) SetOutline else SetShadow", and GTA's PrintString
+        // runs the outline branch only while DropAmount is zero. A TextDraw therefore has a
+        // shadow only when the server asked for one - [font] shadow is the fallback for the
+        // surfaces this mod lays out itself, not for a draw the client would have left bare.
         //
-        // A TextDraw has a shadow only when the server asked for one. [font] shadow is the
-        // fallback for the surfaces this mod lays out itself (GameText), not for a TextDraw
-        // the client would have drawn bare.
+        // Menu and GameText lines are this mod's own: [menu] outline/shadow and the GameText
+        // style table set both on purpose and both are drawn, so the rule above must not touch
+        // them (menu.outline=1 with menu.shadow=3 is the default, and losing one of the two is
+        // a visible change).
         const bool hasOutline = it.outlineSize > 0;
+        const bool shadowSuppressed = it.isTextDraw && hasOutline;
         const bool wantShadow = it.shadowSize > 0 || (g_cfg.shadow && !it.isTextDraw);
-        if (!hasOutline && wantShadow) {
+        if (!shadowSuppressed && wantShadow) {
             int sx = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetX;
             int sy = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetY;
             // Only the client's own amount is in the 640x480 space; the [font] fallback is pixels.
