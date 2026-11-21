@@ -129,7 +129,7 @@ verbose = off
 | `font.shadow` / `font.shadow_offset` | `on` / `1, 1` | 任意のドロップシャドウ。オフセットはピクセル単位。 |
 | `font.letter_width` | `on` | 各ランを、ゲームが `letterWidth` から確保した幅に引き伸ばします(サーバー側のアスペクト比を維持)。 |
 | `font.client_glyphs` | `on` | 一部の句読点について、クライアント自身のフェイスが描く記号を描きます (face 2 の `]` は星、`[` は何も描きません)。`off` で通常の括弧のまま。 |
-| `overlay.hook_point` | `endscene` | `endscene` は EndScene で描画するため、他のオーバーレイ（omp-client の F9 ウィンドウ、RTSS、ImGui MOD）が上に描かれます。これが既定値です: Present で描くと omp-client 自身のウィンドウを覆っていました。`present` はすべてのオーバーレイより上に描きます。 |
+| `overlay.hook_point` | `endscene` | `endscene` は EndScene で描画するため、他のオーバーレイ (omp-client の F9 ウィンドウ、RTSS、ImGui MOD) が上に描かれます。これが既定値です。`present` はすべてのオーバーレイより上に描き、omp-client 自身のウィンドウを覆います。 |
 | `textdraw.fonts` | `0, 1, 2, 3` | 描き直すフォント ID。`4`/`5` はスプライトとモデルプレビューです。`all` = すべての ID。 |
 | `textdraw.brace_colors` | `off` | `{RRGGBB}` / `{RRGGBBAA}` の波かっこも色変更として解釈します（クライアント自身は解釈しません）。 |
 | `textdraw.scoreboard_layer` | `under` | `under` は GameText レイヤーをスコアボードの**手前** (パネルより先) に描画します。パネルは半透明なので、クライアント自身の GameText と同じように文字が透けて見えます。`hide` はパネルが開いている間は描画しません (パネルの描画をフックできない場合のフォールバック)。 |

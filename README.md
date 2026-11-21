@@ -154,7 +154,7 @@ verbose = off
 | `font.shadow` / `font.shadow_offset` | `on` / `1, 1` | Optional drop shadow, offset in pixels. |
 | `font.letter_width` | `on` | Stretch each run to the width the game reserved from `letterWidth` (keeps the server's aspect ratio). |
 | `font.client_glyphs` | `on` | Draw the symbol the client's own face draws for a few punctuation characters instead of the character itself: face 2 shows a star for `]` and nothing for `[`. `off` keeps plain brackets. |
-| `overlay.hook_point` | `endscene` | `endscene` draws at EndScene, so other overlays (omp-client's F9 window, RTSS, ImGui mods) are drawn above us. That is the default: at Present this overlay painted over omp-client's own window. `present` puts us above every other overlay. |
+| `overlay.hook_point` | `endscene` | `endscene` draws at EndScene, so other overlays (omp-client's F9 window, RTSS, ImGui mods) are painted above us - that is the default. `present` puts us above every other overlay, which covers omp-client's own window. |
 | `textdraw.fonts` | `0, 1, 2, 3` | Font ids to re-render; `4`/`5` are sprite and model preview. `all` = every id. |
 | `textdraw.brace_colors` | `off` | Also read `{RRGGBB}` / `{RRGGBBAA}` braces as colour changes. The client itself does not, so this only makes sense for a server that prints them on purpose (chat syntax). |
 | `textdraw.scoreboard_layer` | `under` | `under` draws the GameText and native-menu layers before the scoreboard panel, so the panel covers them (the text shows through its translucency, the menu sits below it) and — because the panel is translucent — the text shows through it like the client's own. `hide` skips the layer while the panel is open, which is the fallback when the panel's draw cannot be hooked. |
@@ -627,7 +627,7 @@ client's, because the horizontal fit counted one cell per source byte; it now
 counts the drawn glyphs, which leaves a residual of roughly +/-10% from the
 substitute font's own advances.
 
-**Another overlay can be covered.** With the default `hook_point = present` the
+**Another overlay can be covered.** With the default `hook_point = endscene` the
 overlay is painted after every other `Present` overlay, so it can cover their UI.
 omp-client (0.4.0) is the one case seen so far: its F9 settings window is Dear ImGui
 1.90.8 drawn from a hook on SA-MP's own `SAMPD3DPresent`, which runs inside the

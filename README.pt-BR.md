@@ -146,7 +146,7 @@ verbose = off
 | `font.shadow` / `font.shadow_offset` | `on` / `1, 1` | Sombra projetada opcional, deslocamento em pixels. |
 | `font.letter_width` | `on` | Estica cada trecho até a largura que o jogo reservou a partir de `letterWidth` (mantém a proporção definida pelo servidor). |
 | `font.client_glyphs` | `on` | Desenha o símbolo que a própria face do cliente desenha para alguns sinais: na face 2, `]` vira uma estrela e `[` não desenha nada. `off` mantém os colchetes normais. |
-| `overlay.hook_point` | `endscene` | `endscene` desenha no EndScene, então outros overlays (janela F9 do omp-client, RTSS, mods ImGui) ficam acima de nós. Esse é o padrão: desenhando no Present este overlay cobria a própria janela do omp-client. `present` nos coloca acima de todos os outros overlays. |
+| `overlay.hook_point` | `endscene` | `endscene` desenha no EndScene, então outros overlays (janela F9 do omp-client, RTSS, mods ImGui) ficam acima de nós - é o padrão. `present` nos coloca acima de todos os outros overlays, cobrindo a própria janela do omp-client. |
 | `textdraw.fonts` | `0, 1, 2, 3` | Ids de fonte a renderizar novamente; `4`/`5` são sprite e prévia de modelo. `all` = todos os ids. |
 | `textdraw.brace_colors` | `off` | Também interpreta `{RRGGBB}` / `{RRGGBBAA}` como cor. O cliente não faz isso; só serve para servidores que imprimem essas chaves de propósito. |
 | `textdraw.scoreboard_layer` | `under` | `under` desenha a camada de GameText **antes** do painel do placar; como o painel é translúcido, o texto aparece através dele, igual ao GameText do próprio cliente. `hide` não desenha enquanto o painel está aberto (é o fallback quando o desenho do painel não pode ser hookado). |

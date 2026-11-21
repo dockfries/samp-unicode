@@ -139,7 +139,7 @@ verbose = off
 | `font.shadow` / `font.shadow_offset` | `on` / `1, 1` | 可选投影，偏移单位像素。 |
 | `font.letter_width` | `on` | 把每一段拉伸到游戏按 `letterWidth` 预留的宽度（保留服务器的宽高比）。 |
 | `font.client_glyphs` | `on` | 对少数标点，画客户端自己字体画的那个符号（font 2 的 `]` 是五角星、`[` 什么都不画）；`off` 保留原样括号。 |
-| `overlay.hook_point` | `endscene` | `endscene` 在 EndScene 绘制，所以别的叠层（omp-client 的 F9 窗口、RTSS、ImGui mod）画在我们上面。这是默认值：在 Present 绘制时我们曾盖住 omp-client 自己的窗口。`present` 让我们盖在所有叠层之上。 |
+| `overlay.hook_point` | `endscene` | `endscene` 在 EndScene 绘制，所以别的叠层（omp-client 的 F9 窗口、RTSS、ImGui mod）画在我们上面 —— 这是默认值。`present` 让我们盖在所有叠层之上，会遮住 omp-client 自己的窗口。 |
 | `textdraw.fonts` | `0, 1, 2, 3` | 要重画的字体 id；`4`/`5` 是精灵和模型预览。`all` = 全部。 |
 | `textdraw.brace_colors` | `off` | 是否把 `{RRGGBB}` / `{RRGGBBAA}` 花括号也当颜色变化（客户端本身不解析，只有服务端故意输出时才有意义）。 |
 | `textdraw.scoreboard_layer` | `under` | `under` = GameText 图层在计分板面板**之前**绘制，面板盖住它；因为面板是半透明的，文字会**透出来**，和客户端自己的 GameText 一致。`hide` = 面板打开时不画（钩不上面板绘制时的回退）。 |
