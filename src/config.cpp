@@ -24,7 +24,7 @@
 //   enabled = on           take over the native menu text
 //
 //   [overlay]
-//   hook_point = endscene  present | endscene; endscene (default) lets other overlays
+//   hook_point = present   present | endscene; endscene lets other overlays
 //                          (omp-client's F9 window, RTSS, ImGui mods) cover us
 //
 //   [gametext]
@@ -367,11 +367,11 @@ static void WriteDefaultIni(const std::wstring& path)
         L"client_text_outline = auto\r\n"
 
         L"\r\n[overlay]\r\n"
-        L"; endscene = draw at EndScene, so other overlays (omp-client's settings\r\n"
-        L"; window, RTSS, other ImGui mods) are drawn above us (default)\r\n"
-        L"; present = draw at Present, i.e. above every other overlay - that covered\r\n"
-        L"; omp-client's own window, which is why it is no longer the default\r\n"
-        L"hook_point = endscene\r\n"
+        L"; present = draw at Present (default). endscene draws earlier, so omp-client's\r\n"
+        L"; own window and RTSS cover us - but on this client EndScene is reached with a\r\n"
+        L"; render target that is not the back buffer, so the overlay has to skip the\r\n"
+        L"; frame and the game crawls: keep it at present unless that is fixed\r\n"
+        L"hook_point = present\r\n"
         L"; Shadow offset in pixels: dx, dy\r\n"
         L"shadow_offset = 1, 1\r\n"
         L"\r\n"
@@ -646,10 +646,11 @@ void LoadConfig()
         g_cfg.clientTextOutline = (ol == L"on") ? 1 : (ol == L"off") ? 0 : -1;
     }
 
-    // [overlay] hook_point: endscene (default; omp-client draws its own window at Present, so
-    // drawing there put this overlay on top of it) or present (above every other overlay).
+    // [overlay] hook_point: present (default) or endscene. EndScene is drawn before omp-client's
+    // own window, but on this client it is reached with a render target that is not the back
+    // buffer - the overlay then skips the frame and the game drops to about one frame a second.
     {
-        const std::wstring where = IniGetStr(L"overlay.hook_point", L"endscene");
+        const std::wstring where = IniGetStr(L"overlay.hook_point", L"present");
         g_cfg.hookEndScene = (::_wcsicmp(where.c_str(), L"endscene") == 0);
     }
     {

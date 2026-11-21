@@ -388,6 +388,15 @@ static void SetupState(IDirect3DDevice9* dev)
     dev->SetFVF(kFvf);
 }
 
+// GTA draws its text in a 640x480 space and stretches the outline and the shadow by the real
+// screen (SCREEN_STRETCH_X/Y, gta-reversed source/game_sa/common.h), so the client's outline=1 is
+// four pixels wide at 2560 and one at 640. DrawOneItem only sees device pixels, so the current
+// screen is kept here and the TextDraw/GameText offsets are scaled the same way.
+static int g_stretchW = 640;
+static int g_stretchH = 480;
+static int StretchX(int n) { const int v = (int)((float)n * (float)g_stretchW / 640.0f + 0.5f); return v < 1 ? 1 : (v > 32 ? 32 : v); }
+static int StretchY(int n) { const int v = (int)((float)n * (float)g_stretchH / 480.0f + 0.5f); return v < 1 ? 1 : (v > 32 ? 32 : v); }
+
 static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass)
 {
     // An inline client symbol (the arrows) is one square quad with the client's
@@ -466,19 +475,32 @@ static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass
         // The TextDraw's own shadow size wins; [font] shadow / shadow_offset
         // is the fallback for every item that does not ask for one.
         if (it.shadowSize > 0 || g_cfg.shadow) {
-            const int sx = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetX;
-            const int sy = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetY;
+            int sx = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetX;
+            int sy = it.shadowSize > 0 ? it.shadowSize : g_cfg.shadowOffsetY;
+            // A TextDraw's own shadow amount is in the same 640x480 space as its outline.
+            if (it.shadowSize > 0) {
+                sx = StretchX(sx);
+                sy = StretchY(sy);
+            }
             quad(x + (float)sx, y + (float)sy, qw, (float)h, it.shadowColor);
         }
         if (it.outlineSize > 0) {
-            for (int ring = 1; ring <= it.outlineSize; ring++) {
-                for (int dy = -ring; dy <= ring; dy++) {
-                    for (int dx = -ring; dx <= ring; dx++) {
-                        if (dx != -ring && dx != ring && dy != -ring && dy != ring) continue;
-                        quad(x + (float)dx, y + (float)dy, qw, (float)h, it.color2);
-                    }
-                }
-            }
+            // Eight offsets at the outline distance - exactly what GTA itself does. Its
+            // CFont::PrintString ("Handle outline", gta-reversed source/game_sa/Font.cpp) draws the
+            // whole string eight times, at (+-n,0), (0,+-n) and the four diagonals, with the edge
+            // amount zeroed so those passes do not recurse; the body is drawn afterwards on top.
+            // A full ring instead (sum of 8r, i.e. 4n(n+1) quads of the whole run) is not the
+            // original shape - at n=2 it fills pixels GTA leaves empty - and at the 255 an unsigned
+            // read of -1 produced it was nine million quads per frame.
+            static const int kDirs[8][2] = { { -1, -1 }, { 0, -1 }, { 1, -1 }, { -1, 0 },
+                                             { 1, 0 },   { -1, 1 }, { 0, 1 },  { 1, 1 } };
+            // The amount is in the client's 640x480 space, so it is stretched like GTA does it:
+            // outline=1 is one pixel at 640x480 and four at 2560 wide.
+            const int ox = StretchX(it.outlineSize);
+            const int oy = StretchY(it.outlineSize);
+            for (int i = 0; i < 8; i++)
+                quad(x + (float)(kDirs[i][0] * ox), y + (float)(kDirs[i][1] * oy), qw,
+                     (float)h, it.color2);
         }
         // Client text is not ringed: the client paints its shadow as the same line copied
         // a few pixels around, and those offsets are not a ring. Four copies in a cross up
@@ -792,6 +814,8 @@ void DrawUnderPanel(IDirect3DDevice9* dev)
 
     int screenW = *(int*)samp::kAddrScreenW;
     int screenH = *(int*)samp::kAddrScreenH;
+    g_stretchW = screenW > 0 ? screenW : 640;
+    g_stretchH = screenH > 0 ? screenH : 480;
 
     std::vector<DrawItem> gts, menus;
     RECT gtRect = { 0, 0, 0, 0 };
@@ -843,6 +867,8 @@ void RenderOnOverlay(IDirect3DDevice9* dev)
     // window) and put a ghost copy of the menu title in the corner.
     int screenW = *(int*)samp::kAddrScreenW;
     int screenH = *(int*)samp::kAddrScreenH;
+    g_stretchW = screenW > 0 ? screenW : 640;
+    g_stretchH = screenH > 0 ? screenH : 480;
 
     DWORD now   = ::GetTickCount();
     DWORD delta = g_lastFrameTick ? (now - g_lastFrameTick) : 0;

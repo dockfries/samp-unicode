@@ -334,16 +334,19 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
 
         D3DCOLOR c1 = SwapRB(hlFlag ? hlColor : *(DWORD*)(obj + samp::kOffColor));
         D3DCOLOR c2 = SwapRB(*(DWORD*)(obj + samp::kOffColor2));
-        int  shadowSize  = *(BYTE*)(obj + samp::kOffFlagShadow);
-        int  outlineSize = *(BYTE*)(obj + samp::kOffFlagOutline);
+        // Signed read: the client keeps -1 in these fields for "not set", and reading the byte
+        // unsigned turns that into 255. A 255-pixel outline is 255 rings x 8 quads per run, which
+        // is ~2000 quads per TextDraw (35 of them made a frame take a second) and spreads a black
+        // halo hundreds of pixels wide over the screen. Out of range therefore means "not set".
+        int  shadowSize  = (int)(signed char)obj[samp::kOffFlagShadow];
+        int  outlineSize = (int)(signed char)obj[samp::kOffFlagOutline];
+        // Keep the client's values as they are: 0xFF is a real 255 in this field (the server sends
+        // -1 for "not set" and the client stores the byte), and the client passes it straight to
+        // GTA, which draws eight offsets that far apart in the drop colour. Only a negative value
+        // is impossible here and becomes 0.
+        if (shadowSize  < 0) shadowSize  = 0;
+        if (outlineSize < 0) outlineSize = 0;
         if (!g_cfg.shadow) shadowSize = 0;
-        // Both values are used exactly as the server set them, like the client
-        // does. A very large outline costs 4n^2 quads per run, so it is only
-        // reported once - not clipped.
-        if (outlineSize > 8 || shadowSize > 16) {
-            static bool onceBig = false;
-            if (!onceBig) { onceBig = true; LogW(L"large outline/shadow: outline=%d shadow=%d (drawn as set)", outlineSize, shadowSize); }
-        }
         bool center  = *(BYTE*)(obj + samp::kOffFlagCenter) != 0;
         bool right   = *(BYTE*)(obj + samp::kOffFlagRight) != 0;
 
@@ -429,12 +432,13 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
                 it.px      = px;
                 it.fontId  = line[i].font;
                 it.color   = line[i].color;
-                // The outline and the shadow follow the text's alpha, not a fixed one: a server
-                // that fades a TextDraw out (or draws it translucent) had its glyphs fade while a
-                // solid black ring and a solid shadow stayed on screen.
-                const DWORD tdAlpha = line[i].color & 0xFF000000u;
-                it.color2  = (c2 & 0x00FFFFFFu) | tdAlpha;
-                it.shadowColor = tdAlpha;                  // black, same alpha as the glyphs
+                // The drop colour is used exactly as the client uses it: textdraw.cpp:216 hands
+                // backgroundColor to Font_SetDropColor and GTA draws both the outline and the
+                // shadow in it, alpha included. Forcing the glyphs' alpha onto it turned the
+                // client's 0x3F000000 outline into solid black, and the eight 255-unit offsets
+                // (1020 px at 2560 wide) then covered the screen instead of fading away.
+                it.color2      = c2;
+                it.shadowColor = c2;
                 it.shadowSize  = shadowSize;
                 it.outlineSize = outlineSize;
                 it.scaleX  = sx;
@@ -459,12 +463,13 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
             y += (float)lineH;
         }
 
-        LogDbg(L"redraw TextDraw: font=%u '%s' (chars=%d, letterH=%.2f) at=(%.1f,%.1f) scale=%.1fx%.1f color=%08X color2=%08X boxFlag=%d boxColor=%08X",
-               font, w.c_str(), (int)w.size(), letterH,
+        LogDbg(L"redraw TextDraw: font=%u px=%d '%s' (chars=%d, letterH=%.2f) at=(%.1f,%.1f) scale=%.1fx%.1f color=%08X color2=%08X boxFlag=%d boxColor=%08X outline=%d shadow=%d",
+               font, px, w.c_str(), (int)w.size(), letterH,
                *(float*)(obj + samp::kOffX), *(float*)(obj + samp::kOffY),
                *(float*)(obj + samp::kOffBoxW), *(float*)(obj + samp::kOffBoxH),
                (unsigned)*(DWORD*)(obj + samp::kOffColor), (unsigned)*(DWORD*)(obj + samp::kOffColor2),
-               (int)obj[samp::kOffBoxFlag], (unsigned)*(DWORD*)(obj + samp::kOffBoxColor));
+               (int)obj[samp::kOffBoxFlag], (unsigned)*(DWORD*)(obj + samp::kOffBoxColor),
+               outlineSize, shadowSize);
     }
 
     // Only blank the source text when the item was actually queued. With
