@@ -542,6 +542,23 @@ static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass
     }
 }
 
+// One bad item must not take the frame with it: an exception here used to skip the whole
+// overlay, and since the TextDraw the client would have drawn is already blanked by the time we
+// draw, its text simply disappeared. Draw each item under its own guard and say which one threw.
+static void SafeDrawItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass)
+{
+    __try {
+        DrawOneItem(dev, it, bodyPass);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        static bool once = false;
+        if (!once) {
+            once = true;
+            LogW(L"draw item threw: pass=%d px=%d outline=%d shadow=%d '%s'",
+                 (int)bodyPass, it.px, it.outlineSize, it.shadowSize, it.text.c_str());
+        }
+    }
+}
+
 // GameText fades in and out on the client; mirror that so a redrawn message
 // does not pop in at full alpha and vanish instantly. A permanent message
 // (time 0, which the fixes treat as "until replaced") only fades in.
@@ -1065,12 +1082,12 @@ void RenderOnOverlay(IDirect3DDevice9* dev)
     // Per-frame timing, so a slow frame can be attributed instead of guessed at.
     const DWORD tDraw0 = ::GetTickCount();
     LockTextureCache();
-    for (size_t i = 0; i < gts.size(); i++)   DrawOneItem(dev, gts[i], false);
-    for (size_t i = 0; i < items.size(); i++) DrawOneItem(dev, items[i], false);
-    for (size_t i = 0; i < menus.size(); i++) DrawOneItem(dev, menus[i], false);
-    for (size_t i = 0; i < gts.size(); i++)   DrawOneItem(dev, gts[i], true);
-    for (size_t i = 0; i < items.size(); i++) DrawOneItem(dev, items[i], true);
-    for (size_t i = 0; i < menus.size(); i++) DrawOneItem(dev, menus[i], true);
+    for (size_t i = 0; i < gts.size(); i++)   SafeDrawItem(dev, gts[i], false);
+    for (size_t i = 0; i < items.size(); i++) SafeDrawItem(dev, items[i], false);
+    for (size_t i = 0; i < menus.size(); i++) SafeDrawItem(dev, menus[i], false);
+    for (size_t i = 0; i < gts.size(); i++)   SafeDrawItem(dev, gts[i], true);
+    for (size_t i = 0; i < items.size(); i++) SafeDrawItem(dev, items[i], true);
+    for (size_t i = 0; i < menus.size(); i++) SafeDrawItem(dev, menus[i], true);
     UnlockTextureCache();
     {
         static DWORD s_last = 0, s_frames = 0, s_tex = 0, s_buildMs = 0;
