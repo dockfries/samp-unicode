@@ -1504,11 +1504,13 @@ bool MenuWindowActive()
 }
 static bool InMenuWindow(const char* text)
 {
-    // Belonging to the menu object's own buffer is the one structural test that cannot
-    // be fooled: the string the game is about to draw is the menu's own. "A menu is open"
-    // is not enough - the HUD keeps drawing the money, the clock and the radio name through
-    // the same CFont while a menu is up, and those must stay where the game puts them.
-    return InMenuObject(text);
+    // Inside CMenu's own buffer: the title, and any string the game keeps there.
+    if (InMenuObject(text)) return true;
+    // A row is drawn from a copy the game keeps in its panel, outside that buffer, so the
+    // object test cannot see it. Rows are only ever drawn while the window is open, which is
+    // what MenuWindowActive() covers; the font-state signature checked by the caller is what
+    // separates a row from the HUD text the game keeps drawing meanwhile.
+    return MenuWindowActive();
 }
 
 // While the window is open, only text drawn with the font state the menu itself
