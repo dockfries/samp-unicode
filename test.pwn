@@ -390,7 +390,10 @@ static SetAndShow(Text:t, playerid, const text[])
 public MoveTick()
 {
 #if defined TextDrawSetPos
+    // Setting the position only changes the server's copy: the client is told when the
+    // draw is shown again, and without this the probe never moves on screen.
     TextDrawSetPos(gMove, float(gMoveX), 250.0);
+    TextDrawShowForAll(gMove);
 #else
     TextDrawDestroy(gMove);
     gMove = Make(float(gMoveX), 250.0, 1, "moving probe");
