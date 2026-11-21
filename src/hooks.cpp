@@ -2364,6 +2364,12 @@ void LoadLearnedSites()
         break;
     }
 
+    // The globals are what ShadowSiteKnown()/ChatBodySiteKnown() walk, and ParseSiteList only
+    // advanced these locals - so every seeded site was written into the arrays and then never
+    // looked at. Both counts are published here and again after the file's line is read.
+    g_shadowSiteCount  = shadows;
+    g_chatBodySiteCount = bodies;
+
     if (line.empty()) {
         if (!shadows && !bodies)
             LogW(L"sites: this client build is new, its sites are learned on the first line");
@@ -2391,8 +2397,14 @@ void LoadLearnedSites()
         csv[len] = 0;
         bodies = ParseSiteList(csv, g_chatBodySites, bodies, 8);
     }
-    LogW(L"sites: %d shadow, %d chat body site(s) known for this client build", shadows,
-         bodies);
+    g_shadowSiteCount  = shadows;
+    g_chatBodySiteCount = bodies;
+
+    LogW(L"sites: %d shadow, %d chat body site(s) known for this client build (key %08X/%u, "
+         L"first shadow=%X, first chat=%X)",
+         shadows, bodies, (unsigned)stamp, (unsigned)size,
+         (unsigned)(g_shadowSiteCount ? g_shadowSites[0] : 0),
+         (unsigned)(g_chatBodySiteCount ? g_chatBodySites[0] : 0));
 }
 
 static bool ChatBodySiteKnown(DWORD rva)
@@ -2422,7 +2434,8 @@ static void LearnShadowSite(DWORD rva)
 {
     if (rva == 0xFFFFFFFFu || ShadowSiteKnown(rva) || g_shadowSiteCount >= 12) return;
     g_shadowSites[g_shadowSiteCount++] = rva;
-    LogW(L"shadow site learned: +0x%X (%d known)", (unsigned)rva, g_shadowSiteCount);
+    LogW(L"shadow site learned: +0x%X (%d known, first=%X)", (unsigned)rva, g_shadowSiteCount,
+         (unsigned)g_shadowSites[0]);
     SaveLearnedSites();
 }
 
