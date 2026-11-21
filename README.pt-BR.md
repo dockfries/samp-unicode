@@ -396,6 +396,15 @@ ativa o parser como uma extensão e ainda aceita a forma de oito dígitos
 
 ## Problemas conhecidos
 
+**TextDraws animados podem sair do lugar.** O texto de um TextDraw é composto com as
+fontes substitutas de `[font] font0..font3`, que são proporcionais, enquanto as fontes de
+TextDraw do próprio cliente são bitmap de célula fixa. Um servidor que anima um TextDraw
+trocando letras por espaços - nome do site rolando, título de máquina de escrever - conta
+com essas larguras exatas, então as letras passam a se sobrepor ou a se espalhar. Nenhuma
+fonte substituta recupera as larguras originais: exclua aquele id em `[textdraw] fonts`
+(por exemplo `fonts = 1, 2, 3`) para o cliente desenhá-lo, ou aponte o `fontN`
+correspondente para uma fonte monoespaçada.
+
 **Menus e o menu de pausa não deixam mais texto para trás.** Builds antigas deixavam: com um
 Menu (`/menu`) ou o menu de pausa aberto o cliente para de repintar a área, então uma
 mensagem que expirava mantinha os últimos pixels - e o fade piorava a situação, porque

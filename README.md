@@ -574,6 +574,15 @@ turns the parser on as an extension and additionally accepts the eight-digit
 
 ## Known issues
 
+**Animated TextDraws can drift out of place.** TextDraw text is laid out with the
+substitute faces from `[font] font0..font3`, which are proportional, while the client's
+own TextDraw faces are fixed-cell bitmap fonts. A server that animates a TextDraw by
+swapping letters for spaces - a moving site name, a typewriter title - relies on those
+exact cell widths, so its letters end up overlapping or spread apart. No substitute face
+can restore the original widths: exclude that font id in `[textdraw] fonts` (for example
+`fonts = 1, 2, 3`) so the client draws it unchanged, or point the matching `fontN` at a
+monospaced face to keep the cells aligned.
+
 **Menus and the pause menu no longer leave text behind.** Older builds did: with a
 Menu (`/menu`) or the pause menu open the client stops repainting the area, so a
 message that expired kept its last pixels - and a fade-out made it worse, because
