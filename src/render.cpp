@@ -452,7 +452,10 @@ static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass
     // by every run a mixed line splits into (thousands of calls per frame for a
     // thick outline).
     std::vector<TLVertex> verts;
-    verts.reserve(6 * (size_t)(1 + (size_t)it.outlineSize * 8));
+    // Never reserve from a raw signed field: (size_t)(-1) * 8 wraps to a huge value and
+    // reserve() throws length_error, which used to cost the item its whole draw.
+    const int outlineQuads = (it.outlineSize > 0 && it.outlineSize <= 4096) ? it.outlineSize : 0;
+    verts.reserve(6 * (size_t)(1 + (size_t)outlineQuads * 8));
 
     auto quad = [&verts](float qx, float qy, float qw2, float qh2, D3DCOLOR col) {
         const TLVertex a = { qx,        qy,        0.0f, 1.0f, col, 0.0f, 0.0f };

@@ -337,9 +337,13 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
         // Both fields are uint8 in the client: CFont::SetEdge takes an int8 but stores it in a
         // uint8 EdgeAmount (gta-reversed source/game_sa/FontSpecifiers.h) and SetDropShadowPosition
         // takes a uint8, so a byte of 0xFF reaches GTA as 255 and its eight copies land
-        // 255 * screen/640 away. Reading them unsigned is what the client does; nothing is clamped.
-        int  shadowSize  = (int)obj[samp::kOffFlagShadow];
-        int  outlineSize = (int)obj[samp::kOffFlagOutline];
+        // 255 * screen/640 away.
+        //
+        // obj is a char*, and char is signed on MSVC, so indexing it directly turned 0xFF into -1
+        // (the log showed outline=-1 for the server's "not set"), which then made the vertex
+        // reserve overflow and the item throw. The cast has to be explicit.
+        int  shadowSize  = (int)(unsigned char)obj[samp::kOffFlagShadow];
+        int  outlineSize = (int)(unsigned char)obj[samp::kOffFlagOutline];
         if (!g_cfg.shadow) shadowSize = 0;
         bool center  = *(BYTE*)(obj + samp::kOffFlagCenter) != 0;
         bool right   = *(BYTE*)(obj + samp::kOffFlagRight) != 0;
