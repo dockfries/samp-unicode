@@ -346,16 +346,18 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
 
         D3DCOLOR c1 = SwapRB(hlFlag ? hlColor : *(DWORD*)(obj + samp::kOffColor));
         D3DCOLOR c2 = SwapRB(*(DWORD*)(obj + samp::kOffColor2));
-        // Both fields are uint8 in the client: CFont::SetEdge takes an int8 but stores it in a
-        // uint8 EdgeAmount (gta-reversed source/game_sa/FontSpecifiers.h) and SetDropShadowPosition
-        // takes a uint8, so a byte of 0xFF reaches GTA as 255 and its eight copies land
-        // 255 * screen/640 away.
+        // 0xFF is this field's "not set" sentinel and the client filters it *before* GTA sees it:
+        // it compares the signed byte (0xFF = -1) and only calls Font_SetOutline for a positive
+        // value. Passing 0xFF through as 255 put eight copies 1020 x 769 px away on screen - the
+        // faint copies of every server draw - which is not what the client shows for the same
+        // TextDraw. Reading signed and treating anything <= 0 as "no outline" is what the client
+        // does; a positive value up to 127 is drawn, stretched like GTA stretches it.
         //
-        // obj is a char*, and char is signed on MSVC, so indexing it directly turned 0xFF into -1
-        // (the log showed outline=-1 for the server's "not set"), which then made the vertex
-        // reserve overflow and the item throw. The cast has to be explicit.
-        int  shadowSize  = (int)(unsigned char)obj[samp::kOffFlagShadow];
-        int  outlineSize = (int)(unsigned char)obj[samp::kOffFlagOutline];
+        // The cast has to be explicit: obj is a char*, and char is signed on MSVC.
+        int  shadowSize  = (int)(signed char)obj[samp::kOffFlagShadow];
+        int  outlineSize = (int)(signed char)obj[samp::kOffFlagOutline];
+        if (shadowSize  < 0) shadowSize  = 0;
+        if (outlineSize < 0) outlineSize = 0;
         if (!g_cfg.shadow) shadowSize = 0;
         bool center  = *(BYTE*)(obj + samp::kOffFlagCenter) != 0;
         bool right   = *(BYTE*)(obj + samp::kOffFlagRight) != 0;
