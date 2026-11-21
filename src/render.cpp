@@ -919,6 +919,8 @@ void RenderOnOverlay(IDirect3DDevice9* dev)
 
     std::vector<DrawItem> gts;
     RECT gtRect = { 0, 0, 0, 0 };   // union of the GameText quads, for the snapshot
+    // A capture is a read-back, so the store only covers a GameText box, never the screen.
+    const LONG kBgMaxArea = 640 * 240;
     bool gtRectValid = false;
     BuildGameTextLayer(gts, gtRect, gtRectValid, now, screenW, screenH, false);
 
@@ -1018,9 +1020,17 @@ void RenderOnOverlay(IDirect3DDevice9* dev)
     const bool menuThisFrame = MenuDrawnThisFrame();
     const bool frozenNow = IsGamePaused() || menuThisFrame || g_menuFramePrev;
     g_menuFramePrev = menuThisFrame;
-    if (!OverlayUsesBackgroundStore()) {
+    // The store exists to put back what a fading GameText covered. A capture is a GPU->CPU
+    // read-back (GetRenderTargetData), which stalls the whole pipeline, so it has to stay small:
+    // a 2414x1050 rectangle per frame dropped this game to about one frame a second, and erasing
+    // it pasted a stale (night-black) frame over the world. Only the GameText's own box is ever
+    // worth copying, and only while there is a GameText to protect.
+    const LONG bgArea = (gtRect.right - gtRect.left) * (gtRect.bottom - gtRect.top);
+    const bool bgWanted = OverlayUsesBackgroundStore() && gtRectValid && !gts.empty() &&
+                          bgArea > 0 && bgArea <= kBgMaxArea;
+    if (!bgWanted) {
         if (g_bgValid) g_bgValid = false;      // drop any copy captured under the old rules
-    } else if (gtRectValid) {
+    } else {
         const bool same = g_bgValid &&
                           g_bgRect.left == gtRect.left && g_bgRect.top == gtRect.top &&
                           g_bgRect.right == gtRect.right && g_bgRect.bottom == gtRect.bottom;
@@ -1029,9 +1039,6 @@ void RenderOnOverlay(IDirect3DDevice9* dev)
             g_bgValid = false;
             BgCapture(dev, gtRect);
         }
-    } else if (g_bgValid) {
-        if (frozenNow) BgErase(dev);
-        g_bgValid = false;
     }
     if (g_cfg.verbose) {
         static DWORD lastBg = 0;
@@ -1048,6 +1055,8 @@ void RenderOnOverlay(IDirect3DDevice9* dev)
     // used to free the textures we were about to pass to SetTexture, which is a
     // use-after-free. The critical section is recursive, so the cache calls inside
     // DrawOneItem re-enter it safely.
+    // Per-frame timing, so a slow frame can be attributed instead of guessed at.
+    const DWORD tDraw0 = ::GetTickCount();
     LockTextureCache();
     for (size_t i = 0; i < gts.size(); i++)   DrawOneItem(dev, gts[i], false);
     for (size_t i = 0; i < items.size(); i++) DrawOneItem(dev, items[i], false);
@@ -1056,6 +1065,23 @@ void RenderOnOverlay(IDirect3DDevice9* dev)
     for (size_t i = 0; i < items.size(); i++) DrawOneItem(dev, items[i], true);
     for (size_t i = 0; i < menus.size(); i++) DrawOneItem(dev, menus[i], true);
     UnlockTextureCache();
+    {
+        static DWORD s_last = 0, s_frames = 0, s_tex = 0, s_buildMs = 0;
+        static DWORD s_lastTex = 0;
+        s_frames++;
+        const DWORD tDrawMs = ::GetTickCount() - tDraw0;
+        s_buildMs += tDrawMs;
+        const DWORD nowMs = ::GetTickCount();
+        const DWORD tex = TextureBuildCount();
+        if (nowMs - s_last >= 2000) {
+            const float fps = (float)s_frames * 1000.0f / (float)(nowMs - s_last);
+            LogW(L"frame: fps=%.1f draw=%lums/frame pieces=%d textures=%u (+%u since last)",
+                 fps, s_frames ? s_buildMs / s_frames : 0,
+                 (int)(gts.size() + items.size() + menus.size()), tex, tex - s_lastTex);
+            s_last = nowMs; s_frames = 0; s_buildMs = 0; s_lastTex = tex;
+        }
+        (void)s_tex;
+    }
 
     StateBlockApply();
 }

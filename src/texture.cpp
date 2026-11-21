@@ -13,6 +13,7 @@
 //   - cache key = "<pixel height>|<text>"
 // ---------------------------------------------------------------------------
 #include "common.h"
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 
@@ -58,6 +59,13 @@ static const std::wstring& FaceOf(int fontId)
 // drew everything at 400. Only the client text sets it - the other surfaces keep the
 // default, so their textures are byte for byte what they were.
 static int g_atlasWeight = FW_NORMAL;
+// How many textures have been rasterised since the process started: a frame that rebuilds them
+// instead of reusing the cache is the one thing that can cost a second per frame.
+static volatile LONG g_textureBuilds = 0;
+int TextureBuildCount() { return (int)g_textureBuilds; }
+
+// Defined with the cache; called from GetTextTexture when a new texture no longer fits.
+static void EvictOldest();
 
 void SetAtlasWeight(int weight)
 {
@@ -321,6 +329,7 @@ static LPDIRECT3DTEXTURE9 BuildTexture(IDirect3DDevice9* dev, const std::wstring
     ::DeleteDC(dc);
 
     if (!tex) return nullptr;
+    ::InterlockedIncrement(&g_textureBuilds);
     if (outW) *outW = w;
     if (outH) *outH = h;
     // The advance is the measured width, not the texture's: the texture carries 2 px of padding
@@ -345,6 +354,7 @@ LPDIRECT3DTEXTURE9 GetTextTexture(IDirect3DDevice9* dev, const std::wstring& tex
 
     auto it = g_texCache.find(key);
     if (it != g_texCache.end() && it->second.tex) {
+        it->second.lastUsed = ::GetTickCount();     // keep what a still frame keeps asking for
         if (outW) *outW = it->second.w;
         if (outH) *outH = it->second.h;
         if (outLogicalW) *outLogicalW = it->second.logicalW;
@@ -359,12 +369,18 @@ LPDIRECT3DTEXTURE9 GetTextTexture(IDirect3DDevice9* dev, const std::wstring& tex
     // string can outweigh dozens of small ones.
     size_t bytes = (size_t)w * (size_t)h * 4;
     if (g_texBytes + bytes > kTexCacheBudget || g_texCache.size() >= kTexCacheEntries) {
-        ClearTextureCache();
-        LogDbg(L"texture cache budget reached, cleared");
+        // Clearing everything made a server with one animated TextDraw (the moving site name in the
+        // corner, a different string every frame) rebuild *every* string every frame: the new entry
+        // pushed the cache over the budget, the whole cache went, and 35 pieces were rasterised
+        // again - about a second per frame. Evict the least recently used entries instead: the
+        // static lines are touched every frame and stay, the animated one ages out and is rebuilt
+        // on its own.
+        EvictOldest();
     }
 
     TexEntry e;
     e.tex = tex; e.w = w; e.h = h; e.logicalW = logicalW;
+    e.lastUsed = ::GetTickCount();
     g_texCache[key] = e;
     g_texBytes += bytes;
     if (outW) *outW = w;
@@ -480,6 +496,36 @@ std::vector<TextSpan> SplitByFont(const std::wstring& in, int fontId)
     return out;
 }
 
+// Drop the entries nothing has asked for in a while, oldest first, until the cache is back under
+// half its budget. Called from GetTextTexture while the cache lock is held.
+static void EvictOldest()
+{
+    if (g_texCache.empty()) return;
+    const DWORD now = ::GetTickCount();
+
+    struct Aged { std::wstring key; DWORD lastUsed; };
+    std::vector<Aged> aged;
+    aged.reserve(g_texCache.size());
+    for (auto& kv : g_texCache) aged.push_back(Aged{ kv.first, kv.second.lastUsed });
+    std::sort(aged.begin(), aged.end(),
+              [](const Aged& a, const Aged& b) { return a.lastUsed < b.lastUsed; });
+
+    size_t freed = 0, dropped = 0;
+    const size_t target = kTexCacheBudget / 2;
+    for (const Aged& a : aged) {
+        if (g_texBytes <= target && g_texCache.size() < kTexCacheEntries / 2) break;
+        auto it = g_texCache.find(a.key);
+        if (it == g_texCache.end()) continue;
+        const size_t bytes = (size_t)it->second.w * (size_t)it->second.h * 4;
+        if (it->second.tex) it->second.tex->Release();
+        g_texCache.erase(it);
+        g_texBytes = (g_texBytes > bytes) ? g_texBytes - bytes : 0;
+        freed += bytes; dropped++;
+    }
+    LogDbg(L"texture cache: evicted %u entries (%u KB), %u KB held now",
+           (unsigned)dropped, (unsigned)(freed / 1024), (unsigned)(g_texBytes / 1024));
+    (void)now;
+}
 void ClearTextureCache()
 {
     TexGuard guard;

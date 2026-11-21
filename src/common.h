@@ -316,6 +316,7 @@ struct TexEntry {
     LPDIRECT3DTEXTURE9 tex = nullptr;
     int w = 0, h = 0;
     int logicalW = 0;   // the advance: measured width, without the texture's padding
+    DWORD lastUsed = 0; // tick of the last use, so an animated TextDraw ages out instead of the cache
 };
 // A stretch of text that one face can draw; see SplitByFont.
 struct TextSpan { std::wstring text; int font; };
@@ -328,6 +329,7 @@ void LockTextureCache();       // recursive; render.cpp holds it while drawing
 void UnlockTextureCache();
 void SetTextureDevice(IDirect3DDevice9* dev);
 int  MeasureTextWidth(const std::wstring& text, int pxHeight, int fontId);
+int  TextureBuildCount();          // textures rasterised so far, for the frame log
 int  MeasureLineHeight(int pxHeight, int fontId);
 // Split a run into spans of one face each: characters the requested font has no
 // glyph for (CJK in a Latin display face) go to the fallback face.
