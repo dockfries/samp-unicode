@@ -1,0 +1,25 @@
+# Normalize text files to LF in the repository
+* text=auto eol=lf
+
+# Windows-only files keep CRLF (cmd.exe is happier with it)
+*.bat    text eol=crlf
+*.cmd    text eol=crlf
+*.ps1    text eol=crlf
+*.sln    text eol=crlf
+*.vcxproj text eol=crlf
+*.vcxproj.filters text eol=crlf
+
+# Binary artifacts
+*.asi    binary
+*.exe    binary
+*.dll    binary
+*.lib    binary
+*.png    binary
+*.ico    binary
+*.zip    binary
+*.ttf    binary
+*.otf    binary
+*.ttc    binary
+
+# Keep vendored code exactly as shipped upstream
+third_party/** -text

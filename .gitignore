@@ -1,0 +1,59 @@
+# ---- Build output ----------------------------------------------------------
+obj/
+bin/
+dist/
+*.obj
+*.o
+*.asi
+*.exe
+*.dll
+*.lib
+*.exp
+*.ilk
+*.pdb
+*.idb
+*.iobj
+*.ipdb
+*.tlog
+*.lastbuildstate
+*.res
+*.map
+
+# ---- Visual Studio ---------------------------------------------------------
+.vs/
+ipch/
+*.user
+*.suo
+*.sdf
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.vcxproj.user
+*.vcxproj.filters
+*.sln.docstates
+
+# ---- Runtime artifacts (generated next to the plugin) ----------------------
+samp-unicode.ini
+samp-unicode.log
+*.log
+
+# ---- Test harness binaries -------------------------------------------------
+testhost.exe
+testenc.exe
+testced.exe
+
+# ---- Archives --------------------------------------------------------------
+*.zip
+*.7z
+*.rar
+
+# ---- OS clutter ------------------------------------------------------------
+Thumbs.db
+ehthumbs.db
+desktop.ini
+.DS_Store
+*.amx
+
+# local helper scripts
+_b.bat
+_h.bat

@@ -1,0 +1,109 @@
+name: build
+
+# Manual builds only - nothing runs on push, pull_request or a schedule.
+on:
+  workflow_dispatch:
+    inputs:
+      smoke_test:
+        description: "Fail the run if the plugin cannot be loaded"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Build (Release)
+        shell: pwsh
+        run: |
+          msbuild samp-unicode.vcxproj /nologo /m /v:minimal `
+            /p:Configuration=Release /p:Platform=Win32
+          if ($LASTEXITCODE -ne 0) { throw "msbuild failed with exit code $LASTEXITCODE" }
+
+      - name: Load the plugin once
+        shell: pwsh
+        env:
+          SMOKE: ${{ inputs.smoke_test }}
+        run: |
+          $asi = Get-ChildItem -Path bin -Recurse -Filter 'samp-unicode.asi' |
+                 Select-Object -First 1
+          if (-not $asi) { throw 'samp-unicode.asi was not produced' }
+          Write-Host "artifact: $($asi.FullName) ($($asi.Length) bytes)"
+
+          # Ship default: the bundled blackletter is what font0 resolves to.
+          Copy-Item third_party\fonts\PirataOne-Regular.ttf `
+                    (Join-Path $asi.DirectoryName 'font0.ttf') -Force
+
+          # cl.exe needs the x86 developer environment
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * `
+                  -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+                  -property installationPath
+          if (-not $vs) { throw 'Visual Studio with C++ tools not found' }
+          $vcvars = Join-Path $vs 'VC\Auxiliary\Build\vcvars32.bat'
+          cmd /c "`"$vcvars`" >nul && cl /nologo /MT /O2 testhost.cpp /Fe:testhost.exe user32.lib"
+          if ($LASTEXITCODE -ne 0) { throw 'testhost build failed' }
+
+          # Running the plugin also writes the default INI next to it.
+          & .\testhost.exe $asi.FullName 1200
+          if ($LASTEXITCODE -ne 0) { throw 'the plugin could not be loaded' }
+
+          $log = Join-Path $asi.DirectoryName 'samp-unicode.log'
+          if (Test-Path $log) { Get-Content $log }
+          if ($env:SMOKE -eq 'true') {
+            if (-not (Test-Path $log)) { throw 'log file was not written' }
+            $text = Get-Content $log -Raw
+            foreach ($needle in @('mod loaded', 'charset:', 'display font', '0=Pirata One')) {
+              if ($text -notmatch [regex]::Escape($needle)) {
+                throw "log is missing: $needle"
+              }
+            }
+          }
+
+      - name: Stage the release files
+        shell: pwsh
+        run: |
+          $asi = Get-ChildItem -Path bin -Recurse -Filter 'samp-unicode.asi' |
+                 Select-Object -First 1
+          $ini = Join-Path $asi.DirectoryName 'samp-unicode.ini'
+          if (-not (Test-Path $ini)) { throw 'the plugin did not create samp-unicode.ini' }
+
+          # Only what a player has to copy next to the game. The READMEs, the licence
+          # files and the preview live in the repository, and the artifact upload
+          # wraps this folder in a zip by itself - no nested archive.
+          $stage = Join-Path $env:RUNNER_TEMP 'pkg'
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item $asi.FullName $stage
+          Copy-Item $ini $stage
+
+          # The bundled blackletter: font0.ttf is what the plugin looks for, and the
+          # OFL text has to travel with the font itself.
+          Copy-Item third_party\fonts\PirataOne-Regular.ttf (Join-Path $stage 'font0.ttf')
+          Copy-Item third_party\fonts\LICENSE (Join-Path $stage 'font0-OFL.txt')
+
+          Get-ChildItem $stage | ForEach-Object { Write-Host "  $($_.Name)" }
+          "dir=$stage" >> $env:GITHUB_OUTPUT
+        id: pkg
+
+      - name: Upload samp-unicode-release
+        uses: actions/upload-artifact@v7
+        with:
+          name: samp-unicode-release
+          path: ${{ steps.pkg.outputs.dir }}
+          if-no-files-found: error
