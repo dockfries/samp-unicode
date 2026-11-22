@@ -111,7 +111,6 @@ struct Config {
     std::wstring fontFace;             // face = "" - family name for a .ttc with no name table
     float sizeDivisor     = 50.0f;      // size_divisor = 50 (client cell = 20H = letterH * screenH / 48)
     float baselineOffset  = 0.0f;       // baseline_offset = 0 (pixels)
-    float glyphGamma      = 1.00f;      // glyph_gamma: 1 = GDI's own coverage (the client's look)
     bool  fontAntialias   = false;      // font.antialias: on = grayscale edges, off = the client's 1-bit stencil
     bool  outlineRaster   = false;      // font.outline_raster: GetGlyphOutline fill; unavailable on some
     int   shadowOffsetX   = 1;          // shadow_offset = 1, 1
@@ -394,13 +393,14 @@ void SeedKnownBuildSites();        // measured shadow / chat-body call sites for
 bool HookClientText();            // CFonts::DrawText / DrawLittleText (0.3.DL)
 bool ClientTextWanted(const char* text, int len);   // does this line need this mod's font?
 void UnhookClientText();
+  int  GlyphRasterFactor();   // texture.cpp: the multiple glyphs are rasterised at
 void DrawClientTextNow(std::vector<DrawItem>& items);   // paints them immediately
+
 void RetryHookFontVtable();                            // every ID3DXFont, once it exists
 void RetryHookWrapperVtable();                         // the client CFontWrapper vtable
 void LogFontTextSummary();                              // per-second take/drop/pass counts
 bool MenuWindowActive();   // a native menu is on screen (see hooks.cpp)
 bool ScoreboardUp();       // the SA-MP scoreboard panel is open (see hooks.cpp)
 void UnhookAll();
-
 
 

@@ -9,6 +9,9 @@
 #include "gametext_styles.h"
 #include <cstdio>
 
+
+// Incremented once per rendered frame, see the declaration in common.h.
+
 IDirect3DDevice9* g_device = nullptr;
 
 // State needed to put the device vtable back when the plugin unloads.
@@ -389,9 +392,31 @@ static void SetupState(IDirect3DDevice9* dev)
     dev->SetRenderState(D3DRS_LIGHTING, FALSE);
     dev->SetRenderState(D3DRS_FOGENABLE, FALSE);
     dev->SetRenderState(D3DRS_SCISSORTESTENABLE, FALSE);
+
+    // Everything that can silently discard a fragment, or move it, is set rather than inherited.
+    // A stencil test left enabled by the world pass is the one that mattered: the text drew, the
+    // draw calls returned success, and nothing appeared - for as long as the stencil buffer
+    // happened to fail the test, which is why it blinked with the view and why typing in the chat
+    // (the input box draws state too) started it. A state block cannot help here: it preserves the
+    // client's state, so the same inherited stencil test came back after every draw.
+    dev->SetRenderState(D3DRS_STENCILENABLE, FALSE);
+    dev->SetRenderState(D3DRS_ALPHATESTENABLE, FALSE);
+    dev->SetRenderState(D3DRS_CLIPPLANEENABLE, 0);
+    dev->SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID);
+    dev->SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD);
+    dev->SetRenderState(D3DRS_BLENDOPALPHA, D3DBLENDOP_ADD);
+    dev->SetRenderState(D3DRS_COLORVERTEX, FALSE);
+    dev->SetRenderState(D3DRS_SRGBWRITEENABLE, FALSE);
+    dev->SetRenderState(D3DRS_MULTISAMPLEANTIALIAS, TRUE);
     dev->SetRenderState(D3DRS_ALPHABLENDENABLE, TRUE);
     dev->SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA);
     dev->SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA);
+    // Alpha is written as well as colour. The client draws its chat into a render-to-surface
+    // texture that it clears to zero - alpha included - and blits with SRCALPHA, so a run
+    // drawn there with a mask that excludes alpha would land in the texture and come out
+    // invisible. The mask is inherited state, so it is set rather than assumed.
+dev->SetRenderState(D3DRS_COLORWRITEENABLE, D3DCOLORWRITEENABLE_ALPHA | D3DCOLORWRITEENABLE_RED | D3DCOLORWRITEENABLE_GREEN | D3DCOLORWRITEENABLE_BLUE);
+    dev->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, FALSE);
 
     dev->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE);
     dev->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE);
@@ -467,8 +492,11 @@ static void DrawOneItem(IDirect3DDevice9* dev, const DrawItem& it, bool bodyPass
     // is what made the scoreboard's stretched title look blocky beside the very same text drawn
     // 1:1. Linear is safe now that the atlas carries real grayscale coverage - it only smooths
     // the enlargement instead of inventing an edge ramp the glyph does not have.
-    const bool scaled = (it.scaleX < 0.999f || it.scaleX > 1.001f);
-    const D3DTEXTUREFILTERTYPE filter = scaled ? D3DTEXF_LINEAR : D3DTEXF_POINT;
+    // A run rasterised above its display size has to be sampled linearly, or the downscale
+    // drops whole rows and the extra resolution buys nothing.
+    // Every glyph texture is rasterised above its display size (see kRasterScale in texture.cpp),
+    // so every draw minifies and the filter is always linear.
+    const D3DTEXTUREFILTERTYPE filter = D3DTEXF_LINEAR;
     dev->SetSamplerState(0, D3DSAMP_MINFILTER, filter);
     dev->SetSamplerState(0, D3DSAMP_MAGFILTER, filter);
 
@@ -803,6 +831,7 @@ IDirect3DDevice9* RenderDevice()
 void DrawClientTextNow(std::vector<DrawItem>& items)
 {
     if (items.empty()) return;
+
     if (g_inReset.load() || !g_overlayReady) return;
     IDirect3DDevice9* dev = RenderDevice();
     if (!dev) return;
@@ -910,6 +939,8 @@ bool OverlayUsesBackgroundStore();
 
 void RenderOnOverlay(IDirect3DDevice9* dev)
 {
+    // Counted here, before any early return: a frame with nothing to draw is still a
+    // frame, and the chat's frame mode waits on this number to swap its buffers.
     RetryHookFontVtable();
     RetryHookWrapperVtable();
     LogFontTextSummary();
@@ -1134,7 +1165,8 @@ void RenderOnOverlay(IDirect3DDevice9* dev)
             const float fps = (float)s_frames * 1000.0f / (float)(nowMs - s_last);
             LogW(L"frame: fps=%.1f draw=%lums/frame pieces=%d textures=%u (+%u since last)",
                  fps, s_frames ? s_buildMs / s_frames : 0,
-                 (int)(gts.size() + items.size() + menus.size()), tex, tex - s_lastTex);
+                 (int)(gts.size() + items.size() + menus.size()),
+                 tex, tex - s_lastTex);
             s_last = nowMs; s_frames = 0; s_buildMs = 0; s_lastTex = tex;
         }
         (void)s_tex;
@@ -1205,6 +1237,12 @@ static bool OnBackBuffer(IDirect3DDevice9* dev)
     rt->Release();
     return same;
 }
+
+// Client text is drawn immediately, into whatever target is bound. World passes render into
+// off-screen surfaces too, and text painted there is never seen - which is what a 3D label
+// did on the frames its draw landed in one of those passes.
+bool RenderTargetIsBackBuffer(IDirect3DDevice9* dev) { return dev ? OnBackBuffer(dev) : false; }
+
 
 // Set while the overlay draws at EndScene. The background store (capture before the
 // draw, paste back when a frozen frame would otherwise keep the text) assumes the

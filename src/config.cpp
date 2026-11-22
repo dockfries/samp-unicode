@@ -865,10 +865,10 @@ void LoadConfig()
     g_cfg.verbose    = ParseBool(IniGetStr(L"debug.verbose", L"off"), false);
 
     UINT eff = ResolveCodePage();
-    LogW(L"config: file='%s' family='%s' size_divisor=%.1f baseline_offset=%.1f shadow=%d(%d,%d) glyph_gamma=%.2f letter_width=%d",
+    LogW(L"config: file='%s' family='%s' size_divisor=%.1f baseline_offset=%.1f shadow=%d(%d,%d) letter_width=%d glyphs=%dx",
          g_cfg.file.c_str(), g_cfg.family.c_str(), g_cfg.sizeDivisor, g_cfg.baselineOffset,
-         (int)g_cfg.shadow, g_cfg.shadowOffsetX, g_cfg.shadowOffsetY, g_cfg.glyphGamma,
-         (int)g_cfg.respectLetterWidth);
+         (int)g_cfg.shadow, g_cfg.shadowOffsetX, g_cfg.shadowOffsetY,
+         (int)g_cfg.respectLetterWidth, GlyphRasterFactor());
     LogW(L"paths: client_text=%s, font=%d, chat_font=%d, braces=%d, tab=%d, line=%.2f, outline=%d",
          g_cfg.clientText == 2 ? L"draw" : g_cfg.clientText == 1 ? L"log" : L"off",
          g_cfg.clientTextFont, g_cfg.clientTextChatFont,

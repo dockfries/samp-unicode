@@ -74,11 +74,12 @@ void SetAtlasWeight(int weight)
 
 static HFONT MakeFont(int pxHeight, int fontId)
 {
-    // No antialiasing by default, because that is what the client's own text is: a scanline
-    // through its chat is only ever 255 (glyph), 0 (shadow) or the background - not one
-    // intermediate value. Its D3DXCreateFontA(..., quality = 0) resolves to a 1-bit stencil
-    // here, and rendering the same text antialiased is what made this mod's chat look hazy
-    // beside it. font.antialias = on asks GDI for grayscale instead.
+    // The client antialiases its own text, so this mod does too. Measured on a screenshot of
+    // the vanilla chat: the ink holds the glyph colour, the shadow colour and a spread of
+    // coverage values between them, not two levels. An earlier version of this comment claimed
+    // the opposite and shipped font.antialias = off as "faithful"; a player who compared the
+    // two saw the hard 1-bit stencil break up at chat sizes. ANTIALIASED_QUALITY is grayscale
+    // coverage, which is what the client's own D3DXFont produces.
 
     return ::CreateFontW(pxHeight, 0, 0, 0, g_atlasWeight, FALSE, FALSE, FALSE,
                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
@@ -86,6 +87,58 @@ static HFONT MakeFont(int pxHeight, int fontId)
                                               : NONANTIALIASED_QUALITY,
                          DEFAULT_PITCH | FF_DONTCARE,
                          FaceOf(fontId).c_str());
+}
+
+// Glyphs are rasterised at twice the size they are drawn at and sampled back down, because at one
+// to one a CJK glyph's thin horizontal stroke lands on single pixel rows and comes out as
+// half-covered grey.
+//
+// Only small text needs it. From 25 px up a stroke is wide enough that GDI's own antialiasing
+// resolves it, so one to one is sharper (nothing is resampled) and a quarter of the memory.
+// Three times for small text was tried and reverted: the extra resolution did not show up as
+// sharper strokes, and nine times the memory alters the picture rather than the text.
+//
+// The client decides the chat's size (FontGetHeight in samp.dll: 14..20 by screen width, plus
+// twice the client's "fontsize" setting), so it stays between 14 and 30 px - inside the
+// threshold, which is why the chat keeps its resolution at every fontsize and window size.
+//
+// There is no option for this either. A switch only invites the next person to turn it off and see
+// the old problem again.
+static int RasterScaleFor(int pxHeight) { return (pxHeight <= 32) ? 2 : 1; }
+
+static SIZE MeasureRun(HDC dc, const std::wstring& text, int pxHeight, int fontId);   // below
+
+// The factor a run is actually rasterised at: the one above, lowered until the texture fits. A run
+// that would not fit at twice the width is drawn at one to one instead of being cut down to fit a
+// texture it never needed to fill. Measured one to one, so the choice does not depend on itself.
+static int FitFactor(HDC dc, const std::wstring& text, int pxHeight, int fontId)
+{
+    int factor = RasterScaleFor(pxHeight);
+    if (factor <= 1) return 1;
+    HFONT probe = MakeFont(pxHeight, fontId);
+    HGDIOBJ old = probe ? ::SelectObject(dc, probe) : nullptr;
+    const SIZE atOne = MeasureRun(dc, text, pxHeight, fontId);
+    if (old) ::SelectObject(dc, old);
+    if (probe) ::DeleteObject(probe);
+    while (factor > 1 && ((long long)atOne.cx * factor > 8192 ||
+                          (long long)atOne.cy * factor > 8192)) {
+        --factor;
+    }
+    return factor;
+}
+
+
+// For the startup log: one line that says the resolution glyphs are drawn at, so a build
+// that was not the one running can be ruled out before anything else.
+int GlyphRasterFactor() { return RasterScaleFor(0); }
+
+// The size a run is actually rasterised at. Everything downstream (texture size, measured
+// advance) is divided back, so layout still works in client pixels and only the sampling
+// resolution changes.
+static int RasterPx(int pxHeight)
+{
+    const int v = (int)((float)pxHeight * (float)RasterScaleFor(pxHeight) + 0.5f);
+    return v > pxHeight ? v : pxHeight;
 }
 
 // GDI is the only rasteriser now: the measurement and the fill come from the same font handle,
@@ -107,7 +160,7 @@ int MeasureTextWidth(const std::wstring& text, int pxHeight, int fontId)
     // the detours, so they take the same lock the texture cache uses.
     TexGuard guard;
     wchar_t prefix[32];
-    swprintf_s(prefix, L"%d.%d.%d|", fontId, pxHeight, g_atlasWeight);
+    swprintf_s(prefix, L"%d.%d.%d.%d|", fontId, pxHeight, g_atlasWeight, RasterScaleFor(pxHeight));
     std::wstring key = prefix + text;
 
     auto cached = g_widthCache.find(key);
@@ -115,41 +168,33 @@ int MeasureTextWidth(const std::wstring& text, int pxHeight, int fontId)
 
     HDC dc = ::CreateCompatibleDC(nullptr);
     if (!dc) return 0;
-    HFONT fn = MakeFont(pxHeight, fontId);
+    const int factor = FitFactor(dc, text, pxHeight, fontId);
+    const int rpx    = (int)((float)pxHeight * (float)factor + 0.5f);
+    HFONT fn = MakeFont(rpx, fontId);
     HGDIOBJ old = fn ? ::SelectObject(dc, fn) : nullptr;
 
-    const SIZE sz = MeasureRun(dc, text, pxHeight, fontId);
+    const SIZE sz = MeasureRun(dc, text, rpx, fontId);
     if (old) ::SelectObject(dc, old);
     if (fn) ::DeleteObject(fn);
     ::DeleteDC(dc);
 
+    const int logicalW = (int)((float)sz.cx / (float)factor + 0.5f);
     if (g_widthCache.size() >= kWidthCacheEntries) {
         LogDbg(L"width cache full (%d entries), cleared", (int)g_widthCache.size());
         g_widthCache.clear();
     }
-    g_widthCache[key] = sz.cx;
-    return sz.cx;
+    g_widthCache[key] = logicalW;
+    return logicalW;
 }
 
-// Coverage as GDI produced it, mapped through the gamma the config asks for. GDI spreads
-// a glyph's edge over more pixels than the client's own rasteriser does, so the same
-// stroke reads softer; pulling the middle coverage up tightens the edge without touching
-// the stroke's weight. A lookup table because this runs per pixel of every new string.
-static BYTE CoverageGamma(BYTE cov)
-{
-    static BYTE  lut[256];
-    static float built = -1.0f;
-    const float g = (g_cfg.glyphGamma > 0.05f && g_cfg.glyphGamma < 4.0f) ? g_cfg.glyphGamma : 1.0f;
-    if (built != g) {
-        for (int i = 0; i < 256; i++) {
-            const float v = (float)i / 255.0f;
-            const float o = (g == 1.0f) ? v : powf(v, g);
-            lut[i] = (BYTE)(o * 255.0f + 0.5f);
-        }
-        built = g;
-    }
-    return lut[cov];
-}
+// Coverage straight through to alpha.
+//
+// A gamma corrected mapping (coverage encoded with the sRGB transfer) was tried and
+// reverted: the theory is right for a renderer blending in linear light, but this one
+// blends in gamma space with the whole screen already encoded, and the result was a
+// visibly changed picture rather than better text. GDI's coverage is the look the
+// client itself has, and matching it is the goal.
+static BYTE CoverageToAlpha(BYTE cov) { return cov; }
 
 // ---------------------------------------------------------------------------
 static LPDIRECT3DTEXTURE9 BuildTexture(IDirect3DDevice9* dev, const std::wstring& text,
@@ -161,27 +206,40 @@ static LPDIRECT3DTEXTURE9 BuildTexture(IDirect3DDevice9* dev, const std::wstring
     HDC dc = ::CreateCompatibleDC(nullptr);
     if (!dc) return nullptr;
 
-    HFONT fn = MakeFont(pxHeight, fontId);
+    const int factor = FitFactor(dc, text, pxHeight, fontId);
+    const int rpx    = (int)((float)pxHeight * (float)factor + 0.5f);
+    HFONT fn = MakeFont(rpx, fontId);
     if (!fn) { ::DeleteDC(dc); return nullptr; }
     HGDIOBJ oldFont = ::SelectObject(dc, fn);
 
-    SIZE sz = MeasureRun(dc, text, pxHeight, fontId);
+    SIZE sz = MeasureRun(dc, text, rpx, fontId);
 
     // Too long for one texture: cut it down instead of dropping the whole line,
     // so a long message still shows up (visibly shortened) rather than vanishing.
     std::wstring draw = text;
-    if (sz.cx > kMaxTexW || sz.cy > kMaxTexH) {
+    const int scale = factor;
+    // 8192 is the width every D3D9 device this runs on accepts; the logical cap times the
+    // factor would be 12288, and a failed CreateTexture in the middle of a frame costs more
+    // than a shortened line.
+    const int maxW = (kMaxTexW * scale > 8192) ? 8192 : kMaxTexW * scale;
+    const int maxH = (kMaxTexH * scale > 8192) ? 8192 : kMaxTexH * scale;
+    if (sz.cx > maxW || sz.cy > maxH) {
         size_t keep = text.size();
         if (sz.cx > 0) {
-            keep = (size_t)((double)text.size() * (double)kMaxTexW / (double)sz.cx);
+            // maxW is the device pixel budget for this texture; kMaxTexW is only the logical
+            // cap, and keeping to that halved what a long line could show.
+            keep = (size_t)((double)text.size() * (double)maxW / (double)sz.cx);
         }
         if (keep < 1) keep = 1;
         if (keep > text.size()) keep = text.size();
         for (int pass = 0; pass < 6; pass++) {
             draw.assign(text, 0, keep);
-            SIZE t = MeasureRun(dc, draw, pxHeight, fontId);
+            // Measured at the rasterised size, like the texture itself: measuring at pxHeight
+            // made every pass think the cut already fitted, and the texture was then created
+            // at half the width the glyphs needed - a long line lost its tail.
+            SIZE t = MeasureRun(dc, draw, rpx, fontId);
             sz = t;                        // the size of what is actually drawn
-            if (t.cx <= kMaxTexW && t.cy <= kMaxTexH) break;
+            if (t.cx <= maxW && t.cy <= maxH) break;
             if (keep <= 1) break;
             keep = keep > 8 ? keep - keep / 8 : keep - 1;
         }
@@ -193,8 +251,8 @@ static LPDIRECT3DTEXTURE9 BuildTexture(IDirect3DDevice9* dev, const std::wstring
 
     int w = sz.cx + 4;
     int h = sz.cy + 4;
-    if (sz.cx <= 0 || sz.cy <= 0 || w > kMaxTexW + 4 || h > kMaxTexH + 4) {
-        LogDbg(L"texture skipped: px=%d raw=%dx%d (over the limit)", pxHeight, sz.cx, sz.cy);
+    if (sz.cx <= 0 || sz.cy <= 0 || w > maxW + 4 || h > maxH + 4) {
+        LogW(L"texture skipped: px=%d raw=%dx%d (over the limit)", pxHeight, sz.cx, sz.cy);
         ::SelectObject(dc, oldFont);
         ::DeleteObject(fn);
         ::DeleteDC(dc);
@@ -280,7 +338,7 @@ static LPDIRECT3DTEXTURE9 BuildTexture(IDirect3DDevice9* dev, const std::wstring
                         dst[col * 4 + 0] = 0xFF;
                         dst[col * 4 + 1] = 0xFF;
                         dst[col * 4 + 2] = 0xFF;
-                        dst[col * 4 + 3] = CoverageGamma(cov);
+                        dst[col * 4 + 3] = CoverageToAlpha(cov);
                     }
                 }
             }
@@ -299,7 +357,7 @@ static LPDIRECT3DTEXTURE9 BuildTexture(IDirect3DDevice9* dev, const std::wstring
         for (int i = 0; i < w * h; i++, p += 4) {
             const BYTE cov = p[2];
             p[0] = 0xFF; p[1] = 0xFF; p[2] = 0xFF;
-            p[3] = CoverageGamma(cov);
+            p[3] = CoverageToAlpha(cov);
         }
     }
 
@@ -319,7 +377,7 @@ static LPDIRECT3DTEXTURE9 BuildTexture(IDirect3DDevice9* dev, const std::wstring
         LogDbg(L"texture built: px=%d %dx%d chars=%d weight=%d face='%s'",
                pxHeight, w, h, (int)text.size(), g_atlasWeight, FaceOf(fontId).c_str());
     } else {
-        LogDbg(L"texture creation failed: px=%d %dx%d hr=0x%08X", pxHeight, w, h, (unsigned)hr);
+        LogW(L"texture creation failed: px=%d %dx%d hr=0x%08X", pxHeight, w, h, (unsigned)hr);
     }
 
     ::SelectObject(dc, oldBmp);
@@ -328,14 +386,18 @@ static LPDIRECT3DTEXTURE9 BuildTexture(IDirect3DDevice9* dev, const std::wstring
     ::DeleteObject(fn);
     ::DeleteDC(dc);
 
-    if (!tex) return nullptr;
     ::InterlockedIncrement(&g_textureBuilds);
-    if (outW) *outW = w;
-    if (outH) *outH = h;
+    // The texture is rasterised at raster_scale, so every size handed out is divided back:
+    // the quad keeps the client's size and the sampler does the downscale.
+    const float inv = 1.0f / (float)factor;
+    const int   qw  = (int)((float)w * inv + 0.5f);
+    const int   qh  = (int)((float)h * inv + 0.5f);
+    if (outW) *outW = qw;
+    if (outH) *outH = qh;
     // The advance is the measured width, not the texture's: the texture carries 2 px of padding
     // on each side, and advancing by the image put 4 px of blank between every pair of runs in a
     // line the client drew as one call with colour codes in it.
-    if (outLogicalW) *outLogicalW = sz.cx;
+    if (outLogicalW) *outLogicalW = (int)((float)sz.cx * inv + 0.5f);
     return tex;
 }
 
@@ -349,7 +411,7 @@ LPDIRECT3DTEXTURE9 GetTextTexture(IDirect3DDevice9* dev, const std::wstring& tex
     // the detours, so they take the same lock the texture cache uses.
     TexGuard guard;
     wchar_t prefix[32];
-    swprintf_s(prefix, L"%d.%d.%d|", fontId, pxHeight, g_atlasWeight);
+    swprintf_s(prefix, L"%d.%d.%d.%d|", fontId, pxHeight, g_atlasWeight, RasterScaleFor(pxHeight));
     std::wstring key = prefix + text;
 
     auto it = g_texCache.find(key);
@@ -402,7 +464,9 @@ int MeasureLineHeight(int pxHeight, int fontId)
 
     HDC dc = ::CreateCompatibleDC(nullptr);
     if (!dc) return pxHeight;
-    HFONT fn = MakeFont(pxHeight, fontId);
+    // Line height is a property of the size, not of one run, so it uses the size's factor.
+    const int rpx = RasterPx(pxHeight);
+    HFONT fn = MakeFont(rpx, fontId);
     HGDIOBJ old = fn ? ::SelectObject(dc, fn) : nullptr;
     SIZE sz = { 0, 0 };
     ::GetTextExtentPoint32W(dc, L"Ag", 2, &sz);
@@ -410,7 +474,10 @@ int MeasureLineHeight(int pxHeight, int fontId)
     if (fn) ::DeleteObject(fn);
     ::DeleteDC(dc);
 
-    int h = sz.cy > 0 ? sz.cy : pxHeight;
+    // Measured at the rasterised size, so divide back: leaving it here made every multi-line
+    // block (GameText, dialogs) space its rows as far apart as the supersampling factor.
+    int h = (sz.cy > 0) ? (int)((float)sz.cy / (float)RasterScaleFor(pxHeight) + 0.5f) : pxHeight;
+    if (h < 1) h = 1;
     if (cache.size() >= kLineCacheEntries) {
         LogDbg(L"line-height cache full (%d entries), cleared", (int)cache.size());
         cache.clear();
