@@ -43,6 +43,7 @@
 // Value syntax: booleans take on/off, true/false, yes/no, 1/0.
 // ---------------------------------------------------------------------------
 #include "common.h"
+#include "serveraddr.h"
 #include <cstdio>
 #include <map>
 #include <algorithm>
@@ -59,6 +60,22 @@ bool         g_detectCharset = true;
 int          g_singleBytePolicy = 1;   // [encoding] single_byte: 0 system, 1 detect, >1 forced
 
 static std::map<std::wstring, std::wstring> g_ini;
+
+// A single face or path may be written with quotes around it - "JetBrains Mono" reads
+// naturally and every other key here takes a bare value. font.family keeps its quotes,
+// because there they are list syntax.
+static std::wstring Unquote(std::wstring v)
+{
+    while (!v.empty() && (v.front() == L' ' || v.front() == L'\t')) v.erase(v.begin());
+    while (!v.empty() && (v.back() == L' ' || v.back() == L'\t')) v.pop_back();
+    if (v.size() >= 2 && ((v.front() == L'"' && v.back() == L'"') ||
+                          (v.front() == L'\'' && v.back() == L'\''))) {
+        v = v.substr(1, v.size() - 2);
+        while (!v.empty() && (v.front() == L' ' || v.front() == L'\t')) v.erase(v.begin());
+        while (!v.empty() && (v.back() == L' ' || v.back() == L'\t')) v.pop_back();
+    }
+    return v;
+}
 
 // ---------------------------------------------------------------------------
 // Value helpers
@@ -229,260 +246,264 @@ static bool ReadWholeFile(const std::wstring& path, std::vector<BYTE>& out)
 // ---------------------------------------------------------------------------
 // Default template
 // ---------------------------------------------------------------------------
+// The defaults are written to disk on the first run and parsed from here on that same
+// run, so a fresh install behaves exactly like the run after it.
+static const wchar_t* kTemplate =
+    L"; samp-unicode.ini\r\n"
+    L"; Re-renders SA-MP TextDraw / GameText with a real Unicode font.\r\n"
+    L"; File encoding does not matter here: UTF-8, UTF-16 and ANSI are all accepted.\r\n"
+    L"; Booleans accept on/off, true/false, yes/no, 1/0.\r\n"
+L";\r\n"
+L"; Per-server overrides: a file in servers\\ named after the launch address\r\n"
+L"; (servers\\127.0.0.1_7777.ini) replaces only the keys it defines. See the README.\r\n"
+    L"\r\n"
+    L"[font]\r\n"
+    L"; ----------------------------------------------------------------\r\n"
+    L"; How the two font layers fit together\r\n"
+    L"; ----------------------------------------------------------------\r\n"
+    L"; Every character is drawn with the face of its TextDrawFont id, i.e.\r\n"
+    L"; font0..font3 below. If that face has no glyph for the character -\r\n"
+    L"; all Chinese/Japanese/Korean in these four Latin faces - the display\r\n"
+    L"; font from section 1 draws it instead. So: Latin/digits/symbols come\r\n"
+    L"; from font0..3, CJK always comes from file/family.\r\n"
+    L"; ----------------------------------------------------------------\r\n"
+    L"; 1) Display font - the CJK fallback, must carry the station charset\r\n"
+    L"; ----------------------------------------------------------------\r\n"
+    L"; A font file (.ttf/.otf/.ttc). A relative path is looked up next to\r\n"
+    L"; this plugin first (modloader\\samp-unicode\\), then in the game folder\r\n"
+    L"; (next to gta_sa.exe); an absolute path is used as is. Leave empty to\r\n"
+    L"; use the first font file found next to the plugin, then a system font.\r\n"
+    L"file =\r\n"
+    L"; Family name of the display font. Leave empty to read it from the file\r\n"
+    L"; (recommended).\r\n"
+    L"family =\r\n"
+    L"; Index inside a .ttc collection (a .ttc holds several faces, e.g. the\r\n"
+    L"; SC/TC/JP/KR cuts of one CJK family).\r\n"
+    L"collection = 0\r\n"
+    L"; Family name for a .ttc whose name table is unusable (simsun.ttc has an\r\n"
+    L"; empty one on its first face). Leave empty to read it from the file, and\r\n"
+    L"; set it only when the log says the family name could not be read.\r\n"
+    L"face =\r\n"
+    L"; ----------------------------------------------------------------\r\n"
+    L"; 2) The four TextDrawFont faces (Latin letters, digits, symbols)\r\n"
+    L"; ----------------------------------------------------------------\r\n"
+    L"; The original renderer has 0 = blackletter, 1 = bold sans,\r\n"
+    L"; 2 = wide capitals (Bank Gothic), 3 = Pricedown. GameText uses them too:\r\n"
+    L";   style 0,1,6 -> 3   style 2 -> 0   style 3,4,5 -> 2\r\n"
+    L";\r\n"
+    L"; Each value is one of\r\n"
+    L";   font1 = Arial                  an installed family name\r\n"
+    L";   family accepts a list like CSS: entries are tried in order, quotes and\r\n"
+    L";   the generic names sans-serif / system-ui / serif are understood.\r\n"
+    L";   e.g. family = \"Noto Sans SC\", \"Microsoft YaHei\", sans-serif\r\n"
+    L";   font2 = C:\\Fonts\\BankGothic.ttf a font file (no install needed)\r\n"
+    L";   font0 =                        empty: use font0.ttf (or\r\n"
+    L";                                   samp-unicode-font0.ttf, .otf/.ttc)\r\n"
+    L";                                   from this mod folder if present,\r\n"
+    L";                                   else the closest installed face\r\n"
+    L"; Characters a face does not have (all CJK) are drawn with the display\r\n"
+    L"; font above, so \"SAMP 你好\" mixes both without any extra setting.\r\n"
+    L"font0 =\r\n"
+    L"font1 =\r\n"
+    L"font2 =\r\n"
+    L"font3 =\r\n"
+    L"; ----------------------------------------------------------------\r\n"
+    L"; Sizing\r\n"
+    L"; ----------------------------------------------------------------\r\n"
+    L"; Text pixel height = letter_height * screen_height / size_divisor\r\n"
+    L"; bigger divisor = smaller text (60 suits most servers; try 50 to enlarge).\r\n"
+    L"size_divisor = 50\r\n"
+    L"; Global vertical nudge in pixels; negative moves the text up.\r\n"
+    L"baseline_offset = 0\r\n"
+    L"; Fill each glyph from its outline, the way the client's own D3DXFont does.\r\n"
+    L"; GetGlyphOutline is unavailable on some systems (every format returns 1003),\r\n"
+    L"; so off is the default; on falls back to GDI by itself when it fails.\r\n"
+    L"outline_raster = off\r\n"
+    L"; Gray edges instead of hard ones. The client antialiases its own text: a\r\n"
+    L"; scanline through its chat holds the glyph colour, the shadow colour and a\r\n"
+    L"; spread of coverage values between them, so on is the faithful setting and\r\n"
+    L"; what this mod ships with. off gives the hard 1-bit stencil, which at chat\r\n"
+    L"; sizes reads as broken rather than crisp.\r\n"
+    L"antialias = on\r\n"
+
+    L"; Draw a shadow copy behind the text.\r\n"
+    L"shadow = on\r\n"
+    L"; Shadow offset in pixels: dx, dy. Read from this section - it used to sit under\r\n"
+    L"; [overlay], where nothing read it, so editing it there did nothing.\r\n"
+    L"shadow_offset = 1, 1\r\n"
+    L"; Keep the TextDrawLetterSize aspect: stretch the text horizontally to the\r\n"
+    L"; width the game reserved (letterWidth * screen width / 640 per byte).\r\n"
+    L"letter_width = on\r\n"
+    L"; on = draw the symbol the client draws for a few punctuation characters\r\n"
+    L"; (face 2 shows a star for ']' and nothing for '['), off = plain brackets\r\n"
+    L"client_glyphs = on\r\n"
+
+    L"\r\n[paths]\r\n"
+    L"; The text the client itself draws with ID3DXFont: chat lines, all dialog\r\n"
+    L"; styles, the TAB scoreboard, 3D labels, nametags, chat bubbles, the death\r\n"
+    L"; window, object material text and the license plate. The client decodes\r\n"
+    L"; those bytes with the system ANSI code page, so anything outside it shows\r\n"
+    L"; as mojibake; this layer decodes them itself and draws them with the face\r\n"
+    L"; below. off = leave the client alone, log = report only.\r\n"
+    L"client_text = draw\r\n"
+    L"; Face for that text: 0..3 as in [font], or 4 = the display face. 4 is the\r\n"
+    L"; default so every surface draws one consistent face, and CJK needs no\r\n"
+    L"; fallback at all; 1 (Arial) matches the client's own Latin glyphs exactly.\r\n"
+    L"client_text_font = 4\r\n"
+    L"; The chat has its own face: the client draws it with Arial and the chat is\r\n"
+    L"; where most CJK text arrives, so it defaults to the display face too.\r\n"
+    L"client_text_chat_font = 4\r\n"
+    L"; the client does not squeeze, so 1.00 is the natural width).\r\n"
+    L"; 0 = follow the client's own font weight, else 100..900.\r\n"
+    L"client_text_weight = 0\r\n"
+    L"; How many copies of the line its shadow has. 2 = exactly what the client\r\n"
+    L"; draws (4 copies in a cross up to 1280 px wide, 8 above), 1 = the four-copy\r\n"
+    L"; cross only, 0 = no shadow. F7 still switches what the client itself does.\r\n"
+    L"client_text_chat_shadow = 2\r\n"
+    L"; Alpha of those copies (255 = the opaque black the client uses).\r\n"
+    L"client_text_shadow_alpha = 255\r\n"
+    L"; Drop the client's own shadow passes where this mod draws the line. On is\r\n"
+    L"; what makes the line appear once; off leaves the client's copies beside ours.\r\n"
+    L"client_text_drop_shadows = on\r\n"
+    L"; Take the client's text at the font level and at the wrapper vtable. Both\r\n"
+    L"; are found structurally and learn the call sites they need at runtime.\r\n"
+    L"client_text_font_level = on\r\n"
+    L"client_text_wrapper = on\r\n"
+    L"; Also take over the wide entry point: dialog titles, DXUT buttons (the\r\n"
+    L"; spawn screen's << >> and Spawn) and the list captions. Off puts them\r\n"
+    L"; back on the client's own bitmap font, which is what used to happen.\r\n"
+    L"client_text_wrapper_wide = on\r\n"
+    L"; Draw pure-ASCII client text too. 'ours' takes it, 'client' leaves plain\r\n"
+    L"; ASCII to the client's own font (an all-English line then looks unmodded).\r\n"
+    L"client_text_ascii = ours\r\n"
+    L"; Parse {RRGGBB} in chat and dialogs (the client's own chat syntax).\r\n"
+    L"client_text_braces = on\r\n"
+    L"; Spaces a tab expands to in the dialog styles that do not lay cells out.\r\n"
+    L"client_text_tab = 4\r\n"
+    L"; Line spacing multiplier for multi-line client text.\r\n"
+    L"client_text_line = 1.05\r\n"
+    L"; auto = follow the client (recommended), on/off forces a shadow on text the\r\n"
+    L"; client draws without one (dialog bodies, captions).\r\n"
+    L"client_text_outline = auto\r\n"
+
+    L"\r\n[overlay]\r\n"
+    L"; endscene = draw at EndScene, so other overlays (omp-client's F9 window,\r\n"
+    L"; RTSS, other ImGui mods) are painted above us - that is the default\r\n"
+    L"; present = draw at Present, i.e. above every other overlay, which covers\r\n"
+    L"; omp-client's own window\r\n"
+    L"hook_point = endscene\r\n"
+    L"\r\n"
+    L"[textdraw]\r\n"
+    L"; Which TextDraw font ids to re-render. 0..3 are real text fonts,\r\n"
+    L"; 4 = sprite and 5 = 3D model preview are never touched.\r\n"
+    L"; Empty or 'all' means every font id.\r\n"
+    L"fonts = 0, 1, 2, 3\r\n"
+    L"; How the game's own text is hidden: the string is kept and only its colours\r\n"
+    L"; are zeroed, so the box and the client's own hit rectangle keep the real\r\n"
+    L"; metrics. There is no second mode: replacing the string would move them.\r\n"
+    L"; {RRGGBB} colour codes inside a string are NOT part of the client's\r\n"
+    L"; TextDraw/GameText syntax (open.mp: \"does not work in textdraws\"), so by\r\n"
+    L"; default they are drawn as written. on = this mod parses them, and also\r\n"
+    L"; accepts the eight-digit {RRGGBBAA} form. An extension, not parity.\r\n"
+    L"brace_colors = off\r\n"
+    L"; under = the GameText layer is drawn before the panel and shows through\r\n"
+    L"; it (the panel is translucent, like the client's own GameText); hide = skip\r\n"
+    L"scoreboard_layer = under\r\n"
+
+    L"\r\n"
+    L"[menu]\r\n"
+    L"; Native menus (GTA CMenu). The game draws the menu text with its bitmap\r\n"
+    L"; font, so non-ASCII arrives as mojibake. on = the plugin replaces those\r\n"
+    L"; strings with spaces and draws them itself, at the position and size the\r\n"
+    L"; game used. Chat, dialogs and the scoreboard are drawn by the [paths]\r\n"
+    L"; layer instead; this section is the game's own menus only.\r\n"
+    L"enabled = on\r\n"
+    L"; Which of the four faces draws the menu rows (0..3, see [font]).\r\n"
+    L"font = 2\r\n"
+    L"; The game draws the title with a heavier face than the rows.\r\n"
+    L"title_font = 0\r\n"
+    L"; Extra size and vertical offset for the title only. 1.0 / 0 draws it at\r\n"
+    L"; exactly the size and baseline the game asked for; raise the scale or the\r\n"
+    L"; offset if the title should be bigger or sit lower than that.\r\n"
+    L"title_scale = 1.00\r\n"
+    L"title_dy = 0\r\n"
+    L"; Glyph width of the menu title relative to a row glyph. The title face is\r\n"
+    L"; tall and narrow, so the title is drawn squeezed; 0.80 reproduces the width\r\n"
+    L"; the client gives it. Lower = narrower letters, higher = wider.\r\n"
+    L"title_width = 0.80\r\n"
+    L"; Horizontal squeeze for menu text. GDI advances are a little wider than the\r\n"
+    L"; client's own font metrics, so 0.95..1.00 brings the line width closer.\r\n"
+    L"hscale = 1.00\r\n"
+    L"; Alignment of the original pen: 0 = text starts at x, 1 = centred, 2 = right.\r\n"
+    L"align = 0\r\n"
+    L"; Size multiplier for menu text (1.0 = the size the game itself uses).\r\n"
+    L"glyph = 1.0\r\n"
+    L"; Black outline around menu text in pixels; the game draws one, so this\r\n"
+    L"; keeps our letters looking like the ones the game still draws (pure ASCII\r\n"
+    L"; menu rows are left to the game, which is why they keep their outline).\r\n"
+    L"outline = 1\r\n"
+    L"; Extra drop shadow, read at the same 20-px reference as the outline and\r\n"
+    L"; drawn underneath it, so it has to be larger than the outline to show.\r\n"
+    L"shadow = 3\r\n"
+    L"; The title is drawn much larger than the rows, so it carries its own pair\r\n"
+    L"; (both are read at the same 20-px reference size / in pixels).\r\n"
+    L"title_outline = 2\r\n"
+    L"title_shadow = 0\r\n"
+    L"; Drop shadow colour and opacity. 000000 with 255 is the opaque black the\r\n"
+    L"; game itself uses; lower the alpha for a softer, grey shadow.\r\n"
+    L"shadow_color = 000000\r\n"
+    L"shadow_alpha = 255\r\n"
+    L"; Colour as RRGGBB, or 0 = use the colour the game set for the line.\r\n"
+    L"color = 0\r\n"
+    L"\r\n"
+    L"[gametext]\r\n"
+    L"; Re-render server GameTextForPlayer / GameTextForAll announcements.\r\n"
+    L"enabled = on\r\n"
+    L"; Fade the last 400 ms. On by default: the background is restored\r\n"
+    L"; first, so the fade blends over clean pixels and leaves nothing behind.\r\n"
+    L"fade_out = on\r\n"
+    L"; Styles that must NOT be re-rendered (comma separated, 0..6).\r\n"
+    L"; 'none' (the default) re-renders every style, 'all' disables it.\r\n"
+    L"ignore_styles = none\r\n"
+    L"; Multiplier for the built-in per-style text height (1.0 = native size).\r\n"
+    L"scale = 0.82\r\n"
+    L"\r\n"
+    L"[encoding]\r\n"
+    L"; Charset of the text sent by the server.\r\n"
+    L";   auto    follow the system code page (936 GBK, 950 Big5, 932 Shift-JIS,\r\n"
+    L";           949 EUC-KR, 1251 Cyrillic, 1252 Western Europe, ...)\r\n"
+    L";   names   gbk, gb18030, big5, sjis, euc-kr, cp1251, cp1252, utf-8, ...\r\n"
+    L";   numbers 936, 950, 932, 949, 1251, 1252, 65001, ...\r\n"
+    L"charset = auto\r\n"
+    L"; Try strict UTF-8 first, then fall back to the charset above.\r\n"
+    L"utf8_first = on\r\n"
+    L"; Draw pure-ASCII text with our renderer instead of leaving it to the client.\r\n"
+    L"; On is the default: one face and one size for every string, so a line that\r\n"
+    L"; mixes Latin and CJK does not change shape halfway through.\r\n"
+    L"redraw_ascii = on\r\n"
+    L"; With charset = auto, let compact_enc_det guess the encoding. Only\r\n"
+    L"; structurally distinctive results (CJK / Cyrillic) are accepted, so\r\n"
+    L"; Latin1/ASCII never override the system default.\r\n"
+    L"detect = on\r\n"
+    L"; A server that sends Spanish, Polish or Arabic bytes sends the ANSI code page"
+    L" of\r\n"
+    L"; the machine it was built on: 1252, 1250, 1256. Every high byte is a"
+    L" letter\r\n"
+    L"; there, so nothing in the stream identifies it. system = keep the Windows"
+    L" code\r\n"
+    L"; page, detect = use compact_enc_det's single-byte guess, or a number to"
+    L" force it.\r\n"
+    L"single_byte = detect\r\n"
+    L"\r\n"
+    L"[debug]\r\n"
+    L"; Master switch for the log file: off = no samp-unicode.log at all.\r\n"
+    L"log = on\r\n"
+    L"; Log every texture build and every quad draw (troubleshooting only;\r\n"
+    L"; it writes to disk a lot and can slow the game down).\r\n"
+    L"verbose = off\r\n";
+
 static void WriteDefaultIni(const std::wstring& path)
 {
-    static const wchar_t* kTemplate =
-        L"; samp-unicode.ini\r\n"
-        L"; Re-renders SA-MP TextDraw / GameText with a real Unicode font.\r\n"
-        L"; File encoding does not matter here: UTF-8, UTF-16 and ANSI are all accepted.\r\n"
-        L"; Booleans accept on/off, true/false, yes/no, 1/0.\r\n"
-        L"\r\n"
-        L"[font]\r\n"
-        L"; ----------------------------------------------------------------\r\n"
-        L"; How the two font layers fit together\r\n"
-        L"; ----------------------------------------------------------------\r\n"
-        L"; Every character is drawn with the face of its TextDrawFont id, i.e.\r\n"
-        L"; font0..font3 below. If that face has no glyph for the character -\r\n"
-        L"; all Chinese/Japanese/Korean in these four Latin faces - the display\r\n"
-        L"; font from section 1 draws it instead. So: Latin/digits/symbols come\r\n"
-        L"; from font0..3, CJK always comes from file/family.\r\n"
-        L"; ----------------------------------------------------------------\r\n"
-        L"; 1) Display font - the CJK fallback, must carry the station charset\r\n"
-        L"; ----------------------------------------------------------------\r\n"
-        L"; A font file (.ttf/.otf/.ttc). A relative path is looked up next to\r\n"
-        L"; this plugin first (modloader\\samp-unicode\\), then in the game folder\r\n"
-        L"; (next to gta_sa.exe); an absolute path is used as is. Leave empty to\r\n"
-        L"; use the first font file found next to the plugin, then a system font.\r\n"
-        L"file =\r\n"
-        L"; Family name of the display font. Leave empty to read it from the file\r\n"
-        L"; (recommended).\r\n"
-        L"family =\r\n"
-        L"; Index inside a .ttc collection (a .ttc holds several faces, e.g. the\r\n"
-        L"; SC/TC/JP/KR cuts of one CJK family).\r\n"
-        L"collection = 0\r\n"
-        L"; Family name for a .ttc whose name table is unusable (simsun.ttc has an\r\n"
-        L"; empty one on its first face). Leave empty to read it from the file, and\r\n"
-        L"; set it only when the log says the family name could not be read.\r\n"
-        L"face =\r\n"
-        L"; ----------------------------------------------------------------\r\n"
-        L"; 2) The four TextDrawFont faces (Latin letters, digits, symbols)\r\n"
-        L"; ----------------------------------------------------------------\r\n"
-        L"; The original renderer has 0 = blackletter, 1 = bold sans,\r\n"
-        L"; 2 = wide capitals (Bank Gothic), 3 = Pricedown. GameText uses them too:\r\n"
-        L";   style 0,1,6 -> 3   style 2 -> 0   style 3,4,5 -> 2\r\n"
-        L";\r\n"
-        L"; Each value is one of\r\n"
-        L";   font1 = Arial                  an installed family name\r\n"
-        L";   family accepts a list like CSS: entries are tried in order, quotes and\r\n"
-        L";   the generic names sans-serif / system-ui / serif are understood.\r\n"
-        L";   e.g. family = \"Noto Sans SC\", \"Microsoft YaHei\", sans-serif\r\n"
-        L";   font2 = C:\\Fonts\\BankGothic.ttf a font file (no install needed)\r\n"
-        L";   font0 =                        empty: use font0.ttf (or\r\n"
-        L";                                   samp-unicode-font0.ttf, .otf/.ttc)\r\n"
-        L";                                   from this mod folder if present,\r\n"
-        L";                                   else the closest installed face\r\n"
-        L"; Characters a face does not have (all CJK) are drawn with the display\r\n"
-        L"; font above, so \"SAMP 你好\" mixes both without any extra setting.\r\n"
-        L"font0 =\r\n"
-        L"font1 =\r\n"
-        L"font2 =\r\n"
-        L"font3 =\r\n"
-        L"; ----------------------------------------------------------------\r\n"
-        L"; Sizing\r\n"
-        L"; ----------------------------------------------------------------\r\n"
-        L"; Text pixel height = letter_height * screen_height / size_divisor\r\n"
-        L"; bigger divisor = smaller text (60 suits most servers; try 50 to enlarge).\r\n"
-        L"size_divisor = 50\r\n"
-        L"; Global vertical nudge in pixels; negative moves the text up.\r\n"
-        L"baseline_offset = 0\r\n"
-        L"; Coverage gamma for every glyph this mod draws. GDI spreads a glyph edge\r\n"
-        L"; over more pixels than the client's own rasteriser does, which reads as\r\n"
-        L"; soft text beside it; below 1 the middle coverage rises so the stroke keeps\r\n"
-        L"; its weight and the edge tightens. 1.00 = GDI's coverage untouched.\r\n"
-        L"glyph_gamma = 1.00\r\n"
-        L"; Fill each glyph from its outline, the way the client's own D3DXFont does.\r\n"
-        L"; GetGlyphOutline is unavailable on some systems (every format returns 1003),\r\n"
-        L"; so off is the default; on falls back to GDI by itself when it fails.\r\n"
-        L"outline_raster = off\r\n"
-        L"; Gray edges instead of hard ones. The client creates its own font with\r\n"
-        L"; ANTIALIASED_QUALITY, so on is the faithful setting; off gives the hard 1-bit\r\n"
-        L"; stencil. on is what this mod ships with.\r\n"
-        L"antialias = on\r\n"
-
-        L"; Draw a shadow copy behind the text.\r\n"
-        L"shadow = on\r\n"
-        L"; Keep the TextDrawLetterSize aspect: stretch the text horizontally to the\r\n"
-        L"; width the game reserved (letterWidth * screen width / 640 per byte).\r\n"
-        L"letter_width = on\r\n"
-        L"; on = draw the symbol the client draws for a few punctuation characters\r\n"
-        L"; (face 2 shows a star for ']' and nothing for '['), off = plain brackets\r\n"
-        L"client_glyphs = on\r\n"
-
-        L"\r\n[paths]\r\n"
-        L"; The text the client itself draws with ID3DXFont: chat lines, all dialog\r\n"
-        L"; styles, the TAB scoreboard, 3D labels, nametags, chat bubbles, the death\r\n"
-        L"; window, object material text and the license plate. The client decodes\r\n"
-        L"; those bytes with the system ANSI code page, so anything outside it shows\r\n"
-        L"; as mojibake; this layer decodes them itself and draws them with the face\r\n"
-        L"; below. off = leave the client alone, log = report only.\r\n"
-        L"client_text = draw\r\n"
-        L"; Face for that text: 0..3 as in [font], or 4 = the display face. 4 is the\r\n"
-        L"; default so every surface draws one consistent face, and CJK needs no\r\n"
-        L"; fallback at all; 1 (Arial) matches the client's own Latin glyphs exactly.\r\n"
-        L"client_text_font = 4\r\n"
-        L"; The chat has its own face: the client draws it with Arial and the chat is\r\n"
-        L"; where most CJK text arrives, so it defaults to the display face too.\r\n"
-        L"client_text_chat_font = 4\r\n"
-        L"; the client does not squeeze, so 1.00 is the natural width).\r\n"
-        L"; 0 = follow the client's own font weight, else 100..900.\r\n"
-        L"client_text_weight = 0\r\n"
-        L"; How many copies of the line its shadow has. 2 = exactly what the client\r\n"
-        L"; draws (4 copies in a cross up to 1280 px wide, 8 above), 1 = the four-copy\r\n"
-        L"; cross only, 0 = no shadow. F7 still switches what the client itself does.\r\n"
-        L"client_text_chat_shadow = 2\r\n"
-        L"; Alpha of those copies (255 = the opaque black the client uses).\r\n"
-        L"client_text_shadow_alpha = 255\r\n"
-        L"; Drop the client's own shadow passes where this mod draws the line. On is\r\n"
-        L"; what makes the line appear once; off leaves the client's copies beside ours.\r\n"
-        L"client_text_drop_shadows = on\r\n"
-        L"; Take the client's text at the font level and at the wrapper vtable. Both\r\n"
-        L"; are found structurally and learn the call sites they need at runtime.\r\n"
-        L"client_text_font_level = on\r\n"
-        L"client_text_wrapper = on\r\n"
-        L"; Also take over the wide entry point: dialog titles, DXUT buttons (the\r\n"
-        L"; spawn screen's << >> and Spawn) and the list captions. Off puts them\r\n"
-        L"; back on the client's own bitmap font, which is what used to happen.\r\n"
-        L"client_text_wrapper_wide = on\r\n"
-        L"; Draw pure-ASCII client text too. 'ours' takes it, 'client' leaves plain\r\n"
-        L"; ASCII to the client's own font (an all-English line then looks unmodded).\r\n"
-        L"client_text_ascii = ours\r\n"
-        L"; Parse {RRGGBB} in chat and dialogs (the client's own chat syntax).\r\n"
-        L"client_text_braces = on\r\n"
-        L"; Spaces a tab expands to in the dialog styles that do not lay cells out.\r\n"
-        L"client_text_tab = 4\r\n"
-        L"; Line spacing multiplier for multi-line client text.\r\n"
-        L"client_text_line = 1.05\r\n"
-        L"; auto = follow the client (recommended), on/off forces a shadow on text the\r\n"
-        L"; client draws without one (dialog bodies, captions).\r\n"
-        L"client_text_outline = auto\r\n"
-
-        L"\r\n[overlay]\r\n"
-        L"; endscene = draw at EndScene, so other overlays (omp-client's F9 window,\r\n"
-        L"; RTSS, other ImGui mods) are painted above us - that is the default\r\n"
-        L"; present = draw at Present, i.e. above every other overlay, which covers\r\n"
-        L"; omp-client's own window\r\n"
-        L"hook_point = endscene\r\n"
-        L"; Shadow offset in pixels: dx, dy\r\n"
-        L"shadow_offset = 1, 1\r\n"
-        L"\r\n"
-        L"[textdraw]\r\n"
-        L"; Which TextDraw font ids to re-render. 0..3 are real text fonts,\r\n"
-        L"; 4 = sprite and 5 = 3D model preview are never touched.\r\n"
-        L"; Empty or 'all' means every font id.\r\n"
-        L"fonts = 0, 1, 2, 3\r\n"
-        L"; How the game's own text is hidden: the string is kept and only its colours\r\n"
-        L"; are zeroed, so the box and the client's own hit rectangle keep the real\r\n"
-        L"; metrics. There is no second mode: replacing the string would move them.\r\n"
-        L"; {RRGGBB} colour codes inside a string are NOT part of the client's\r\n"
-        L"; TextDraw/GameText syntax (open.mp: \"does not work in textdraws\"), so by\r\n"
-        L"; default they are drawn as written. on = this mod parses them, and also\r\n"
-        L"; accepts the eight-digit {RRGGBBAA} form. An extension, not parity.\r\n"
-        L"brace_colors = off\r\n"
-        L"; under = the GameText layer is drawn before the panel and shows through\r\n"
-        L"; it (the panel is translucent, like the client's own GameText); hide = skip\r\n"
-        L"scoreboard_layer = under\r\n"
-
-        L"\r\n"
-        L"[menu]\r\n"
-        L"; Native menus (GTA CMenu). The game draws the menu text with its bitmap\r\n"
-        L"; font, so non-ASCII arrives as mojibake. on = the plugin replaces those\r\n"
-        L"; strings with spaces and draws them itself, at the position and size the\r\n"
-        L"; game used. Chat, dialogs and the scoreboard are drawn by the [paths]\r\n"
-        L"; layer instead; this section is the game's own menus only.\r\n"
-        L"enabled = on\r\n"
-        L"; Which of the four faces draws the menu rows (0..3, see [font]).\r\n"
-        L"font = 2\r\n"
-        L"; The game draws the title with a heavier face than the rows.\r\n"
-        L"title_font = 0\r\n"
-        L"; Extra size and vertical offset for the title only. 1.0 / 0 draws it at\r\n"
-        L"; exactly the size and baseline the game asked for; raise the scale or the\r\n"
-        L"; offset if the title should be bigger or sit lower than that.\r\n"
-        L"title_scale = 1.00\r\n"
-        L"title_dy = 0\r\n"
-        L"; Glyph width of the menu title relative to a row glyph. The title face is\r\n"
-        L"; tall and narrow, so the title is drawn squeezed; 0.80 reproduces the width\r\n"
-        L"; the client gives it. Lower = narrower letters, higher = wider.\r\n"
-        L"title_width = 0.80\r\n"
-        L"; Horizontal squeeze for menu text. GDI advances are a little wider than the\r\n"
-        L"; client's own font metrics, so 0.95..1.00 brings the line width closer.\r\n"
-        L"hscale = 1.00\r\n"
-        L"; Alignment of the original pen: 0 = text starts at x, 1 = centred, 2 = right.\r\n"
-        L"align = 0\r\n"
-        L"; Size multiplier for menu text (1.0 = the size the game itself uses).\r\n"
-        L"glyph = 1.0\r\n"
-        L"; Black outline around menu text in pixels; the game draws one, so this\r\n"
-        L"; keeps our letters looking like the ones the game still draws (pure ASCII\r\n"
-        L"; menu rows are left to the game, which is why they keep their outline).\r\n"
-        L"outline = 1\r\n"
-        L"; Extra drop shadow, read at the same 20-px reference as the outline and\r\n"
-        L"; drawn underneath it, so it has to be larger than the outline to show.\r\n"
-        L"shadow = 3\r\n"
-        L"; The title is drawn much larger than the rows, so it carries its own pair\r\n"
-        L"; (both are read at the same 20-px reference size / in pixels).\r\n"
-        L"title_outline = 2\r\n"
-        L"title_shadow = 0\r\n"
-        L"; Drop shadow colour and opacity. 000000 with 255 is the opaque black the\r\n"
-        L"; game itself uses; lower the alpha for a softer, grey shadow.\r\n"
-        L"shadow_color = 000000\r\n"
-        L"shadow_alpha = 255\r\n"
-        L"; Colour as RRGGBB, or 0 = use the colour the game set for the line.\r\n"
-        L"color = 0\r\n"
-        L"\r\n"
-        L"[gametext]\r\n"
-        L"; Re-render server GameTextForPlayer / GameTextForAll announcements.\r\n"
-        L"enabled = on\r\n"
-        L"; Fade the last 400 ms. On by default: the background is restored\r\n"
-        L"; first, so the fade blends over clean pixels and leaves nothing behind.\r\n"
-        L"fade_out = on\r\n"
-        L"; Styles that must NOT be re-rendered (comma separated, 0..6).\r\n"
-        L"; 'none' (the default) re-renders every style, 'all' disables it.\r\n"
-        L"ignore_styles = none\r\n"
-        L"; Multiplier for the built-in per-style text height (1.0 = native size).\r\n"
-        L"scale = 0.82\r\n"
-        L"\r\n"
-        L"[encoding]\r\n"
-        L"; Charset of the text sent by the server.\r\n"
-        L";   auto    follow the system code page (936 GBK, 950 Big5, 932 Shift-JIS,\r\n"
-        L";           949 EUC-KR, 1251 Cyrillic, 1252 Western Europe, ...)\r\n"
-        L";   names   gbk, gb18030, big5, sjis, euc-kr, cp1251, cp1252, utf-8, ...\r\n"
-        L";   numbers 936, 950, 932, 949, 1251, 1252, 65001, ...\r\n"
-        L"charset = auto\r\n"
-        L"; Try strict UTF-8 first, then fall back to the charset above.\r\n"
-        L"utf8_first = on\r\n"
-        L"; Draw pure-ASCII text with our renderer instead of leaving it to the client.\r\n"
-        L"; On is the default: one face and one size for every string, so a line that\r\n"
-        L"; mixes Latin and CJK does not change shape halfway through.\r\n"
-        L"redraw_ascii = on\r\n"
-        L"; With charset = auto, let compact_enc_det guess the encoding. Only\r\n"
-        L"; structurally distinctive results (CJK / Cyrillic) are accepted, so\r\n"
-        L"; Latin1/ASCII never override the system default.\r\n"
-        L"detect = on\r\n"
-        L"; A server that sends Spanish, Polish or Arabic bytes sends the ANSI code page"
-        L" of\r\n"
-        L"; the machine it was built on: 1252, 1250, 1256. Every high byte is a"
-        L" letter\r\n"
-        L"; there, so nothing in the stream identifies it. system = keep the Windows"
-        L" code\r\n"
-        L"; page, detect = use compact_enc_det's single-byte guess, or a number to"
-        L" force it.\r\n"
-        L"single_byte = detect\r\n"
-        L"\r\n"
-        L"[debug]\r\n"
-        L"; Master switch for the log file: off = no samp-unicode.log at all.\r\n"
-        L"log = on\r\n"
-        L"; Log every texture build and every quad draw (troubleshooting only;\r\n"
-        L"; it writes to disk a lot and can slow the game down).\r\n"
-        L"verbose = off\r\n";
 
     FILE* fp = nullptr;
     ::_wfopen_s(&fp, path.c_str(), L"wb");
@@ -550,27 +571,100 @@ static std::wstring DescribeMask(DWORD mask)
 }
 
 
+// A commented template for this server, written once so the folder is discoverable. Any
+// failure (Program Files, read-only media) is only logged: the override is optional.
+static void WriteServerTemplate(const std::wstring& dir, const std::wstring& path,
+                                const std::wstring& host, const std::wstring& port)
+{
+    ::CreateDirectoryW(dir.c_str(), nullptr);
+    if (::GetFileAttributesW(path.c_str()) != INVALID_FILE_ATTRIBUTES) return;
+
+    std::wstring text;
+    text += L"; Per-server override for " + host + (port.empty() ? L"" : L":" + port) + L"\r\n";
+    text += L";\r\n";
+    text += L"; Only the keys written here replace the ones in ..\\samp-unicode.ini; everything\r\n";
+    text += L"; else keeps the outer value. The file name is the launch address: lower case,\r\n";
+    text += L"; with anything outside a-z 0-9 . _ - written as _ (the \":\" becomes \"_\").\r\n";
+    text += L";\r\n";
+    text += L"; [font]\r\n";
+    text += L"; size_divisor = 60\r\n";
+    text += L";\r\n";
+    text += L"; [encoding]\r\n";
+    text += L"; charset = 1252\r\n";
+
+    HANDLE f = ::CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                             FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) {
+        LogW(L"config: could not write the per-server template '%s' (error %lu)", path.c_str(),
+             ::GetLastError());
+        return;
+    }
+    // UTF-16LE with a BOM: the loader accepts BOM-less UTF-16 too, but the BOM makes an
+    // editor open it correctly whichever code page the machine runs.
+    const wchar_t kBom = 0xFEFF;
+    DWORD wrote = 0;
+    ::WriteFile(f, &kBom, sizeof(kBom), &wrote, nullptr);
+    DWORD wroteText = 0;
+    ::WriteFile(f, text.data(), (DWORD)(text.size() * sizeof(wchar_t)), &wroteText, nullptr);
+    ::CloseHandle(f);
+    if (wrote == sizeof(kBom) && wroteText == text.size() * sizeof(wchar_t))
+        LogW(L"config: per-server template written '%s'", path.c_str());
+}
+
 void LoadConfig()
 {
     std::wstring primary = g_gameDir + g_pluginStem + L".ini";
 
     std::vector<BYTE> raw;
+    std::wstring baseText;
     if (!ReadWholeFile(primary, raw)) {
-        LogW(L"no config file found, using defaults: %s", primary.c_str());
+        LogW(L"no config file found, writing the defaults: %s", primary.c_str());
         WriteDefaultIni(primary);
         LogW(L"default config written: %s", primary.c_str());
+        // Parse the text that was just written, not the IniGet fallbacks: those disagreed with it
+        // (antialiasing, and whether the client's own shadow copies are dropped), so a first run
+        // drew a black shadow behind the chat and only the second run looked right.
+        baseText.assign(kTemplate);
+    } else {
+        baseText = DecodeText(raw);
     }
-    if (!raw.empty()) ParseIni(DecodeText(raw));
+    ParseIni(baseText);
+
+    // Per-server override: the launch line carries the address, and a file named after it in
+    // servers\ replaces only the keys it defines. Two ParseIni calls would clear the map, so the
+    // override is parsed into the same map by appending its text after the base file's.
+    {
+        std::wstring host, port;
+        const std::wstring cmdline = ::GetCommandLineW();
+        LogW(L"config: launch line '%s'", cmdline.c_str());
+        if (serveraddr::Parse(cmdline, &host, &port) && !host.empty()) {
+            const std::wstring name = serveraddr::FileName(host, port);
+            const std::wstring dir  = g_gameDir + L"servers\\";
+            const std::wstring path = dir + name + L".ini";
+
+            std::vector<BYTE> over;
+            if (ReadWholeFile(path, over) && !over.empty()) {
+                // Re-parse base + override so the override wins, and count what it changed.
+                ParseIni(baseText + L"\n" + DecodeText(over));
+                LogW(L"config: per-server override '%s' applied (%s:%s)", path.c_str(),
+                     host.c_str(), port.empty() ? L"?" : port.c_str());
+            } else {
+                LogW(L"config: no per-server override '%s' (address %s:%s)", path.c_str(),
+                     host.c_str(), port.empty() ? L"?" : port.c_str());
+                WriteServerTemplate(dir, path, host, port);
+            }
+        }
+    }
 
     // ---- [font] ----
-    g_cfg.file            = IniGetStr(L"font.file", L"");
+    g_cfg.file            = Unquote(IniGetStr(L"font.file", L""));
     g_cfg.family          = IniGetStr(L"font.family", L"");
     g_cfg.collectionIndex = IniGetInt(L"font.collection", 0);
-    g_cfg.fontFace = IniGetStr(L"font.face", L"");
+    g_cfg.fontFace = Unquote(IniGetStr(L"font.face", L""));
     for (int i = 0; i < kFontRoleCount; i++) {
         wchar_t key[16];
         swprintf_s(key, L"font.font%d", i);
-        g_cfg.face[i] = IniGetStr(key, L"");
+        g_cfg.face[i] = Unquote(IniGetStr(key, L""));
     }
     g_cfg.sizeDivisor     = IniGetFloat(L"font.size_divisor", 50.0f);
     g_cfg.baselineOffset  = IniGetFloat(L"font.baseline_offset", 0.0f);
@@ -579,10 +673,7 @@ void LoadConfig()
     // Below one the middle coverage is pulled up: the stroke keeps its weight and the
     // edge gets tighter, which is what makes the text read as crisp as the client's own
     // rasteriser instead of soft. 1.0 leaves GDI's coverage untouched.
-    g_cfg.glyphGamma = IniGetFloat(L"font.glyph_gamma", 1.00f);
-    if (g_cfg.glyphGamma < 0.30f) g_cfg.glyphGamma = 0.30f;
-    if (g_cfg.glyphGamma > 2.00f) g_cfg.glyphGamma = 2.00f;
-    g_cfg.fontAntialias = ParseBool(IniGetStr(L"font.antialias", L"off"), false);
+    g_cfg.fontAntialias = ParseBool(IniGetStr(L"font.antialias", L"on"), true);
     g_cfg.outlineRaster = ParseBool(IniGetStr(L"font.outline_raster", L"off"), false);
     g_cfg.respectLetterWidth = ParseBool(IniGetStr(L"font.letter_width", L"on"), true);
     // The client's faces draw a star for ']' in face 2 (and nothing for '['); on by
@@ -606,6 +697,7 @@ void LoadConfig()
         g_cfg.clientTextWrapperWide =
             ParseBool(IniGetStr(L"paths.client_text_wrapper_wide", L"on"), true);
         g_cfg.clientTextChatFont = IniGetInt(L"paths.client_text_chat_font", 4);
+
         if (g_cfg.clientTextChatFont < 0) g_cfg.clientTextChatFont = 0;
         if (g_cfg.clientTextChatFont > kFontDefault) g_cfg.clientTextChatFont = kFontDefault;
 
@@ -622,12 +714,12 @@ void LoadConfig()
             g_cfg.clientTextAsciiOurs = (a == L"ours");
         }
 
-        g_cfg.clientTextWeight = IniGetInt(L"paths.client_text_weight", 400);
+        g_cfg.clientTextWeight = IniGetInt(L"paths.client_text_weight", 0);   // 0 = follow the client; the range check below replaces it
         if (g_cfg.clientTextWeight < 100 || g_cfg.clientTextWeight > 900)
             g_cfg.clientTextWeight = kClientTextWeightDefault;
 
-        g_cfg.clientTextDropShadows = ParseBool(IniGetStr(L"paths.client_text_drop_shadows", L"off"), false);
-        g_cfg.clientTextShadowAlpha = IniGetInt(L"paths.client_text_shadow_alpha", 0);
+        g_cfg.clientTextDropShadows = ParseBool(IniGetStr(L"paths.client_text_drop_shadows", L"on"), true);
+        g_cfg.clientTextShadowAlpha = IniGetInt(L"paths.client_text_shadow_alpha", 255);
         if (g_cfg.clientTextShadowAlpha < 0)   g_cfg.clientTextShadowAlpha = 0;
         if (g_cfg.clientTextShadowAlpha > 255) g_cfg.clientTextShadowAlpha = 255;
 

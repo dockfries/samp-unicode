@@ -195,12 +195,21 @@ server sends everything in one encoding, so name it - `charset = 936` (or `950`,
 `949`, `1251`) - and the mod stops guessing. Every surface that shows text is decoded here,
 so the ANSI code page only matters to what the client submits from its own edit boxes.
 
-**One global configuration, and short text is the weak spot.** There are no
-per-server profiles: `samp-unicode.ini` is read once at start and applies to whatever
-server the player joins next. Detection is weakest exactly where the strings are
-shortest - a menu column header or a two-character label carries too few bytes to be
-certain - so a player who alternates between servers in different languages would have
-to edit the INI each time. That is not a workflow this mod tries to support.
+**Per-server overrides.** `samp-unicode.ini` is read at start, and so is a file in the
+`servers\` folder named after the address the client was launched with - joining
+`127.0.0.1:7777` reads `servers\127.0.0.1_7777.ini`. Only the keys that file defines replace
+the base ones; everything else keeps the outer value. The name is the address in lower case
+with anything outside `a-z 0-9 . _ -` written as `_`, so the colon becomes an underscore. The
+first time a server is joined the folder and a commented template are written; if the folder
+is not writable (Program Files) that failure is only logged and the override simply does not
+exist.
+
+That is what makes alternating between a GBK server and a UTF-8 server practical: each file
+names its own `charset`, and the base INI stays the general case. Detection is weakest
+exactly where the strings are shortest - a menu column header or a two-character label
+carries too few bytes to be certain - so a server with a fixed encoding is worth naming in
+its own file.
+
 
 ## Build
 

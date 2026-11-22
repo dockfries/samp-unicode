@@ -188,12 +188,19 @@ codificação que os sistemas dos jogadores não têm instalada, porque o chat, 
 e o placar continuam passando pela decodificação do próprio cliente, que é a code page
 do sistema.
 
-**Uma configuração global, e o texto curto é o ponto fraco.** Não existem perfis por
-servidor: `samp-unicode.ini` é lido uma vez ao iniciar e vale para qualquer servidor que
-o jogador entrar depois. A detecção é mais fraca exatamente onde as strings são mais
-curtas — um cabeçalho de coluna de menu ou um rótulo de dois caracteres carrega bytes
-de menos para ter certeza — então quem alterna entre servidores em idiomas diferentes
-teria de editar o INI a cada vez. Esse não é um fluxo que este mod tente suportar.
+**Substituições por servidor.** O `samp-unicode.ini` é lido na inicialização e, junto com
+ele, um arquivo na pasta `servers\` cujo nome é o endereço com que o cliente foi iniciado —
+entrar em `127.0.0.1:7777` lê `servers\127.0.0.1_7777.ini`. Só as chaves que esse arquivo
+define substituem as de fora; o resto continua valendo. O nome é o endereço em minúsculas, com
+tudo fora de `a-z 0-9 . _ -` escrito como `_`, então os dois-pontos viram sublinhado. Na
+primeira conexão a pasta e um modelo comentado são criados; se a pasta não for gravável
+(Program Files), a falha só é registrada no log e a substituição simplesmente não existe.
+
+É isso que torna prático alternar entre um servidor GBK e um UTF-8: cada arquivo declara seu
+próprio `charset` e o INI base continua sendo o caso geral. A detecção é mais fraca justamente
+onde as strings são curtas — um cabeçalho de coluna de menu ou um rótulo de dois caracteres —
+então vale nomear a codificação de um servidor fixo no arquivo dele.
+
 
 ## Compilação
 
