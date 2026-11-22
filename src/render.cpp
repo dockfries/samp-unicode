@@ -20,6 +20,12 @@ static void*  g_prevReset    = nullptr;
 bool          g_overlayReady = false;   // the frame hook (Present or EndScene) is live
 
 static std::vector<DrawItem>     g_items;
+
+// Enough for every TextDraw of a busy HUD drawn per character, the chat, the labels and the
+// overlay in one frame. Reaching it is a bug, not a budget: the cap is only here so a runaway
+// text source cannot allocate without bound.
+constexpr size_t kMaxDrawItems = 8192;
+static bool       g_verboseCapWarned = false;
 static std::deque<GameTextItem>  g_gametexts;
 static CRITICAL_SECTION          g_listCs;
 static std::atomic<bool>         g_listCsInit{ false };
@@ -58,7 +64,18 @@ static void ListUnlock() { ::LeaveCriticalSection(&g_listCs); }
 void PushDrawItem(const DrawItem& item)
 {
     ListLock();
-    if (g_items.size() >= 128) {         // per-frame item cap
+    // TextDraws are laid out one glyph per item (the client's own per-character advance decides
+    // where each one goes), so a single HUD row is already close to a hundred items. The old cap of
+    // 128 silently dropped everything after the first row and a half, which is why the tail of the
+    // bottom help line vanished and seemed to jump around from frame to frame.
+    if (g_items.size() >= kMaxDrawItems) {
+        static DWORD s_lastWarn = 0;
+        const DWORD now = ::GetTickCount();
+        if (g_verboseCapWarned == false || now - s_lastWarn > 5000) {
+            LogW(L"draw item cap reached (%d), the rest of this frame is dropped", (int)g_items.size());
+            g_verboseCapWarned = true;
+            s_lastWarn = now;
+        }
         ListUnlock();
         return;
     }
