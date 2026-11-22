@@ -632,21 +632,14 @@ static float ChatOffsetX(long top, float clientX, const std::wstring& text, int 
         s_top = top;
         s_shift = 0.0f;
     } else if (!s_prevText.empty() && clientX > s_prevClientX) {
-        // The client puts its next piece five pixels after what it drew: the timestamp starts at 45
-        // and the message at m_nTimestampWidth + 50, an advance of the timestamp width plus five.
-        // Since the shift only corrects for the width difference, that five cancelled out and the
-        // message ended up flush against the timestamp. Keep it as a floor instead: at least five
-        // pixels after this mod's own glyphs, and never closer than the client would have put it.
+        // The next piece goes five pixels after this mod's own glyphs, whatever they measure. The
+        // client's advance only has to be subtracted, not respected: keeping it when it was larger
+        // left the client's Arial-based position in place, so a narrower face (Noto Sans against a
+        // monospace one) opened a gap of "Arial width - our width + 5" instead of five pixels.
         const float clientAdvance = clientX - s_prevClientX;
         const int   ours = MeasureTextWidth(s_prevText, s_prevPx, s_prevFont);
-        if (ours > 0) {
-            const float kPieceGap = 5.0f;
-            float advance = (float)ours + kPieceGap;
-            if (clientAdvance > advance) advance = clientAdvance;
-            s_shift += advance - clientAdvance;
-        }
+        if (ours > 0) s_shift += ((float)ours + 5.0f) - clientAdvance;
     }
-
     const float x = clientX + s_shift;
     s_prevClientX = clientX;
     s_prevText    = text;
