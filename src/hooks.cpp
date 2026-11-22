@@ -89,6 +89,13 @@ static TextDrawFn g_origTextDraw = nullptr;
 // string this path is already handling: the native call still walks the text
 // (with the colours cleared), and if that string is non-ASCII and a menu is
 // open the menu hook would blank it and draw a second copy in the menu's style.
+// Defined further down, next to the CFont addresses: the width the client's own font would give
+// a TextDraw string (0 when the addresses are unavailable).
+static float ClientStringWidth(const char* text, float letterW, float letterH, int style,
+                               int outline);
+static bool ClientAdvanceVector(const std::string& ascii, float letterW, float letterH,
+                                int style, int outline, std::vector<float>* out);
+
 static volatile LONG g_textDrawDepth = 0;
 
 static void CallOriginalTextDraw(void* self)
@@ -419,16 +426,60 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
                 if (pieces[li][i].symbol) symbolsPx += pieces[li][i].width;
 
         float sx = WidthScale(text, letterW, sw, (float)symbolsPx, totalAll);
-
+        // Verbose only: what the client makes of this string, next to what this mod's own glyph
+        // widths would make of it. Kept because it is the cheapest way to check the two models
+        // against a string somebody reports as wrong.
+        if (g_cfg.verbose && text && text[0]) {
+            static std::vector<std::wstring> s_seen;
+            if (s_seen.size() < 200) {
+                std::wstring key = ToWide(text, (int)::strlen(text));
+                bool seen = false;
+                for (size_t i = 0; i < s_seen.size(); i++)
+                    if (s_seen[i] == key) { seen = true; break; }
+                if (!seen) {
+                    s_seen.push_back(key);
+                    const float cw = ClientStringWidth(text, letterW, letterH, (int)font, outlineSize);
+                    LogDbg(L"td width: client=%.1f ours=%d sx=%.3f '%.40S'",
+                           cw, totalAll, sx, text);
+                }
+            }
+        }
         for (size_t li = 0; li < lines.size(); li++) {
             std::vector<Piece>& line = pieces[li];
 
-            // The advance a symbol reserves is its own square, without the
-            // letterWidth stretch the glyphs get, so the alignment has to sum the
-            // same values the drawing loop advances by.
+            // The client's own advance for every character of this line, and our width for the ones
+            // it has no glyph for (CJK). Glyphs are drawn at their natural width while the pen moves
+            // by the client's cell, so a row keeps the game's spacing without this mod's letters
+            // being stretched to fill cells they were never designed for.
+            std::string plain;
+            std::vector<size_t> at(line.size(), 0);
+            for (size_t i = 0; i < line.size(); i++) {
+                at[i] = plain.size();
+                for (size_t c = 0; c < line[i].text.size(); c++) {
+                    const wchar_t ch = line[i].text[c];
+                    plain.push_back((ch >= 32 && ch < 127) ? (char)ch : '?');
+                }
+            }
+            std::vector<float> adv;
+            const bool haveAdv = ClientAdvanceVector(plain, letterW, letterH, (int)font, outlineSize, &adv);
+
+            std::vector<float> steps;
+            steps.reserve(plain.size() + line.size());
+            for (size_t i = 0; i < line.size(); i++) {
+                if (line[i].symbol) { steps.push_back((float)line[i].width); continue; }
+                for (size_t c = 0; c < line[i].text.size(); c++) {
+                    const wchar_t ch = line[i].text[c];
+                    const size_t idx = at[i] + c;
+                    float step = 0.0f;
+                    if (haveAdv && idx < adv.size() && ch >= 32 && ch < 127) step = adv[idx];
+                    if (step <= 0.0f)
+                        step = (float)MeasureTextWidth(std::wstring(1, ch), px, line[i].font);
+                    steps.push_back(step);
+                }
+            }
+
             float lineAdv = 0.0f;
-            for (size_t i = 0; i < line.size(); i++)
-                lineAdv += (float)line[i].width * (line[i].symbol ? 1.0f : sx);
+            for (size_t i = 0; i < steps.size(); i++) lineAdv += steps[i];
 
             float x = baseX;
             if (right)       x -= lineAdv;
@@ -442,43 +493,61 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
                 continue;
             }
 
+            size_t si = 0;
             for (size_t i = 0; i < line.size(); i++) {
-                DrawItem it;
-                it.text    = line[i].text;
-                it.x       = x;
-                it.y       = y;
-                it.px      = px;
-                it.fontId  = line[i].font;
-                it.color   = line[i].color;
-                // The drop colour is used exactly as the client uses it: textdraw.cpp:216 hands
-                // backgroundColor to Font_SetDropColor and GTA draws both the outline and the
-                // shadow in it, alpha included. Forcing the glyphs' alpha onto it turned the
-                // client's 0x3F000000 outline into solid black, and the eight 255-unit offsets
-                // (1020 px at 2560 wide) then covered the screen instead of fading away.
-                it.color2      = c2;
-                it.shadowColor = c2;
-                it.shadowSize  = shadowSize;
-                it.outlineSize = outlineSize;
-                it.stretchOutline = true;   // the client's own field, in its 640x480 space
-                it.isTextDraw = true;
-                it.scaleX  = sx;
                 if (line[i].symbol) {
-                    // An inline arrow: the client's own sprite square, its own
-                    // vertical offset, and no outline or shadow (the client returns
-                    // right after drawing the sprite). The Unicode arrow stays in
-                    // the text as the fallback for when the texture cannot be read.
-                    it.sprite      = line[i].symbol;
+                    // An inline arrow: the client's own sprite square, its own vertical offset, and
+                    // no outline or shadow. The Unicode arrow stays in the text as the fallback for
+                    // when the texture cannot be read.
+                    DrawItem it;
                     it.text        = ArrowFallback(line[i].symbol);
-                    it.px          = line[i].width;
+                    it.x           = x;
                     it.y           = y + (float)SymbolOffsetPx(px);
-                    it.outlineSize = 0;
+                    it.px          = line[i].width;
+                    it.fontId      = line[i].font;
+                    it.color       = line[i].color;
+                    it.color2      = c2;
+                    it.shadowColor = c2;
                     it.shadowSize  = 0;
+                    it.outlineSize = 0;
+                    it.sprite      = line[i].symbol;
+                    it.stretchOutline = true;
+                    it.isTextDraw   = true;
+                    it.scaleX      = 1.0f;
+                    PushDrawItem(it);
+                    x += steps[si++];
+                    continue;
                 }
-                PushDrawItem(it);
-                // The client advances a button sprite by its own 17H square, not by
-                // the TextDrawLetterSize width, so the arrow keeps its aspect while
-                // the letters around it stretch.
-                x += (float)line[i].width * (line[i].symbol ? 1.0f : sx);
+                for (size_t c = 0; c < line[i].text.size(); c++) {
+                    const wchar_t ch = line[i].text[c];
+                    const float step = steps[si++];
+                    if (ch != L' ') {
+                        DrawItem it;
+                        it.text        = std::wstring(1, ch);
+                        it.x           = x;
+                        it.y           = y;
+                        it.px          = px;
+                        it.fontId      = line[i].font;
+                        it.color       = line[i].color;
+                        // The drop colour is used exactly as the client uses it: textdraw.cpp:216
+                        // hands backgroundColor to Font_SetDropColor and GTA draws both the outline
+                        // and the shadow in it, alpha included.
+                        it.color2      = c2;
+                        it.shadowColor = c2;
+                        it.shadowSize  = shadowSize;
+                        it.outlineSize = outlineSize;
+                        it.stretchOutline = true;   // the client's own field, in its 640x480 space
+                        it.isTextDraw   = true;
+                        // The client draws a glyph exactly as wide as its advance (Font.cpp:
+                        // rt.right = 32 * propValue * Width, and the pen moves by that same value),
+                        // so each glyph fills its own cell. Stretch ours to the same width or a
+                        // narrow face leaves visible gaps between the letters.
+                        const float ourW = (float)MeasureTextWidth(it.text, px, it.fontId);
+                        it.scaleX      = (ourW > 0.0f && step > 0.0f) ? step / ourW : 1.0f;
+                        PushDrawItem(it);
+                    }
+                    x += step;
+                }
             }
             y += (float)lineH;
         }
@@ -1717,6 +1786,125 @@ static bool MenuSigKnown(int style, float sx, float sy)
         return true;   // the line that teaches us a new pair is drawn now
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// The client's own text metrics
+//
+// A TextDraw's layout belongs to the client: it walks the string with CFont and advances by the per
+// glyph values in data\\fonts.dat, with the proportional switch and the outline width folded in.
+// This mod advanced by its own GDI glyph widths instead, which is why a row of labels drifted (the
+// game's 'W' and 'i' are not in the same ratio as any Windows face's) and why a HUD value ended up
+// where the middle of the row is.
+//
+// Rather than reimplement that table, ask the client: CFont::GetStringWidth walks the same code
+// path as CFont::PrintString and returns the width the client itself would use. The setters below
+// are the ones CTextDraw::Draw makes before it prints. Addresses are gta_sa.exe 1.0 US, as listed
+// by gta-reversed (source/game_sa/Font.cpp).
+typedef void  (__cdecl* FontSetScaleFn)(float, float);   // 0x719380
+typedef void  (__cdecl* FontSetStyleFn)(int);            // 0x719490
+typedef void  (__cdecl* FontSetEdgeFn)(int);             // 0x719590
+typedef void  (__cdecl* FontSetPropFn)(int);             // 0x7195B0
+typedef float (__cdecl* FontStringWidthFn)(const char*, int, int);   // 0x71A0E0
+
+static FontSetScaleFn    g_fontSetScale = nullptr;
+static FontSetStyleFn    g_fontSetStyle = nullptr;
+static FontSetEdgeFn     g_fontSetEdge  = nullptr;
+static FontSetPropFn     g_fontSetProp  = nullptr;
+static FontStringWidthFn g_fontStringWidth = nullptr;
+static bool              g_fontMetricsReady = false;
+
+static void InitClientFontMetrics()
+{
+    if (g_fontMetricsReady) return;
+    if (!g_gtaBase) g_gtaBase = (BYTE*)::GetModuleHandleW(L"gta_sa.exe");
+    if (!g_gtaBase) return;
+    const BYTE* b = (const BYTE*)g_gtaBase;
+    g_fontSetScale    = (FontSetScaleFn)    (b + (0x719380 - 0x400000));
+    g_fontSetStyle    = (FontSetStyleFn)    (b + (0x719490 - 0x400000));
+    g_fontSetEdge     = (FontSetEdgeFn)     (b + (0x719590 - 0x400000));
+    g_fontSetProp     = (FontSetPropFn)     (b + (0x7195B0 - 0x400000));
+    g_fontStringWidth = (FontStringWidthFn) (b + (0x71A0E0 - 0x400000));
+    g_fontMetricsReady = true;
+    LogW(L"client font metrics: GetStringWidth at gta_sa+0x71A0E0");
+}
+
+// Every character's advance, as the client would lay it out: measure each prefix and take the
+// difference. The first prefix is one character, so the last entry is the whole string's width.
+// Cached by (style, outline, letter size, text) because a TextDraw's string rarely changes while
+// its numeric fields do (a scoreboard updates every frame).
+struct AdvanceEntry { std::string key; std::vector<float> adv; };
+static std::vector<AdvanceEntry> g_advCache;
+
+static bool ClientAdvanceVector(const std::string& ascii, float letterW, float letterH,
+                                int style, int outline, std::vector<float>* out)
+{
+    out->clear();
+    if (ascii.empty()) return false;
+    char head[96];
+    sprintf_s(head, "%d.%d.%.4f.%.4f|", style, outline, letterW, letterH);
+    std::string key = std::string(head) + ascii;
+    for (size_t i = 0; i < g_advCache.size(); i++)
+        if (g_advCache[i].key == key) { *out = g_advCache[i].adv; return true; }
+
+    InitClientFontMetrics();
+    if (!g_fontMetricsReady) return false;
+    const BYTE* b = (const BYTE*)g_gtaBase;
+    const float hudX = *(float*)(b + (0x859520 - 0x400000));
+    const float hudY = *(float*)(b + (0x859524 - 0x400000));
+    const float sw = (float)*(int*)samp::kAddrScreenW;
+    const float sh = (float)*(int*)samp::kAddrScreenH;
+    // Same save/restore as ClientStringWidth: the client keeps drawing after this returns.
+    BYTE saved[0x40];
+    ::memcpy(saved, b + (0xC71A5C - 0x400000), sizeof(saved));
+    g_fontSetScale(letterW * hudX * sw, letterH * hudY * sh * 0.5f);
+    g_fontSetStyle(style);
+    g_fontSetProp(1);
+    g_fontSetEdge(outline);
+
+    out->resize(ascii.size());
+    std::string prefix;
+    prefix.reserve(ascii.size());
+    float prev = 0.0f;
+    for (size_t i = 0; i < ascii.size(); i++) {
+        prefix.push_back(ascii[i]);
+        const float w = g_fontStringWidth(prefix.c_str(), 1, 0);
+        (*out)[i] = w - prev;
+        prev = w;
+    }
+    ::memcpy((void*)(b + (0xC71A5C - 0x400000)), saved, sizeof(saved));
+    if (g_advCache.size() >= 96) g_advCache.clear();
+    g_advCache.push_back(AdvanceEntry{ key, *out });
+    return true;
+}
+
+// The width the client would give this string at the TextDraw's own letter size, style, outline and
+// proportional flag. Zero when the addresses are unavailable, which leaves our own width in charge
+// exactly as before.
+static float ClientStringWidth(const char* text, float letterW, float letterH, int style, int outline)
+{
+    if (!text || !text[0]) return 0.0f;
+    InitClientFontMetrics();
+    if (!g_fontMetricsReady) return 0.0f;
+    const BYTE* b = (const BYTE*)g_gtaBase;
+    const float hudX = *(float*)(b + (0x859520 - 0x400000));
+    const float hudY = *(float*)(b + (0x859524 - 0x400000));
+    const float sw = (float)*(int*)samp::kAddrScreenW;
+    const float sh = (float)*(int*)samp::kAddrScreenH;
+    // The setters write CFont's global state, and the client is still using it after this call:
+    // its own box and the other TextDraws are drawn with whatever is left here, so the state is
+    // saved before and put back after. CFontDetails is 0x40 bytes at gta_sa+0xC71A5C.
+    BYTE saved[0x40];
+    ::memcpy(saved, b + (0xC71A5C - 0x400000), sizeof(saved));
+    g_fontSetScale(letterW * hudX * sw, letterH * hudY * sh * 0.5f);
+    g_fontSetStyle(style);
+    g_fontSetProp(1);
+    g_fontSetEdge(outline);
+    // full = true: with false the client stops at the first space (it measures a single word),
+    // which is what made every banner report the width of "F".
+    const float width = g_fontStringWidth(text, 1, 0);
+    ::memcpy((void*)(b + (0xC71A5C - 0x400000)), saved, sizeof(saved));
+    return width;
 }
 
 static void __cdecl PrintStringDetour(float x, float y, const char* text)
