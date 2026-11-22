@@ -37,6 +37,7 @@ constexpr DWORD kOffLetterH     = 0x0967;   // float letter height
 constexpr DWORD kOffColor       = 0x096B;   // DWORD text color (stored as AABBGGRR)
 constexpr DWORD kOffBoxW        = 0x0972;   // float box width
 constexpr DWORD kOffBoxH        = 0x0976;   // float box height
+constexpr DWORD kOffProportional = 0x097E;  // BYTE: nonzero = proportional spacing
 constexpr DWORD kOffColor2      = 0x097F;   // DWORD secondary color (shadow/outline)
 constexpr DWORD kOffBoxFlag     = 0x0971;   // BYTE: box enabled
 constexpr DWORD kOffBoxColor    = 0x097A;   // DWORD box colour (fed to CFont as the text background)

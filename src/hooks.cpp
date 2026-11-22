@@ -92,9 +92,10 @@ static TextDrawFn g_origTextDraw = nullptr;
 // Defined further down, next to the CFont addresses: the width the client's own font would give
 // a TextDraw string (0 when the addresses are unavailable).
 static float ClientStringWidth(const char* text, float letterW, float letterH, int style,
-                               int outline);
+                               int outline, bool proportional);
 static bool ClientAdvanceVector(const std::string& ascii, float letterW, float letterH,
-                                int style, int outline, std::vector<float>* out);
+                                int style, int outline, bool proportional,
+                                std::vector<float>* out);
 
 static volatile LONG g_textDrawDepth = 0;
 
@@ -438,7 +439,8 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
                     if (s_seen[i] == key) { seen = true; break; }
                 if (!seen) {
                     s_seen.push_back(key);
-                    const float cw = ClientStringWidth(text, letterW, letterH, (int)font, outlineSize);
+                    const float cw = ClientStringWidth(text, letterW, letterH, (int)font, outlineSize,
+                                                       *(BYTE*)(obj + samp::kOffProportional) != 0);
                     LogDbg(L"td width: client=%.1f ours=%d sx=%.3f '%.40S'",
                            cw, totalAll, sx, text);
                 }
@@ -460,8 +462,13 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
                     plain.push_back((ch >= 32 && ch < 127) ? (char)ch : '?');
                 }
             }
+            // The client spaces a TextDraw character by character only when this flag is set;
+            // without it every glyph is given the same width (fonts.dat's UnpropValue), which is
+            // what the HUD rows use so their columns line up.
+            const bool proportional = *(BYTE*)(obj + samp::kOffProportional) != 0;
             std::vector<float> adv;
-            const bool haveAdv = ClientAdvanceVector(plain, letterW, letterH, (int)font, outlineSize, &adv);
+            const bool haveAdv = ClientAdvanceVector(plain, letterW, letterH, (int)font, outlineSize,
+                                                      proportional, &adv);
 
             std::vector<float> steps;
             steps.reserve(plain.size() + line.size());
@@ -1837,12 +1844,13 @@ struct AdvanceEntry { std::string key; std::vector<float> adv; };
 static std::vector<AdvanceEntry> g_advCache;
 
 static bool ClientAdvanceVector(const std::string& ascii, float letterW, float letterH,
-                                int style, int outline, std::vector<float>* out)
+                                int style, int outline, bool proportional,
+                                std::vector<float>* out)
 {
     out->clear();
     if (ascii.empty()) return false;
     char head[96];
-    sprintf_s(head, "%d.%d.%.4f.%.4f|", style, outline, letterW, letterH);
+    sprintf_s(head, "%d.%d.%d.%.4f.%.4f|", style, outline, proportional ? 1 : 0, letterW, letterH);
     std::string key = std::string(head) + ascii;
     for (size_t i = 0; i < g_advCache.size(); i++)
         if (g_advCache[i].key == key) { *out = g_advCache[i].adv; return true; }
@@ -1859,7 +1867,7 @@ static bool ClientAdvanceVector(const std::string& ascii, float letterW, float l
     ::memcpy(saved, b + (0xC71A5C - 0x400000), sizeof(saved));
     g_fontSetScale(letterW * hudX * sw, letterH * hudY * sh * 0.5f);
     g_fontSetStyle(style);
-    g_fontSetProp(1);
+    g_fontSetProp(proportional ? 1 : 0);
     g_fontSetEdge(outline);
 
     out->resize(ascii.size());
@@ -1881,7 +1889,8 @@ static bool ClientAdvanceVector(const std::string& ascii, float letterW, float l
 // The width the client would give this string at the TextDraw's own letter size, style, outline and
 // proportional flag. Zero when the addresses are unavailable, which leaves our own width in charge
 // exactly as before.
-static float ClientStringWidth(const char* text, float letterW, float letterH, int style, int outline)
+static float ClientStringWidth(const char* text, float letterW, float letterH, int style, int outline,
+                               bool proportional)
 {
     if (!text || !text[0]) return 0.0f;
     InitClientFontMetrics();
@@ -1898,7 +1907,7 @@ static float ClientStringWidth(const char* text, float letterW, float letterH, i
     ::memcpy(saved, b + (0xC71A5C - 0x400000), sizeof(saved));
     g_fontSetScale(letterW * hudX * sw, letterH * hudY * sh * 0.5f);
     g_fontSetStyle(style);
-    g_fontSetProp(1);
+    g_fontSetProp(proportional ? 1 : 0);
     g_fontSetEdge(outline);
     // full = true: with false the client stops at the first space (it measures a single word),
     // which is what made every banner report the width of "F".
