@@ -769,6 +769,97 @@ static HRESULT __fastcall DlgRenderStub(void* self, void* unused, float elapsed)
     return hr;
 }
 
+// ---------------------------------------------------------------------------
+// CChat::Render: the one function the client draws chat lines from
+//
+// Whether a text call belongs to the chat is the input to every chat decision - the pen, the
+// duplicate filter, the shadow pass - and it used to be inferred twice: from a caller-address
+// window measured per build, and from a table filled in at runtime by matching a call's text
+// against the last shadow copy. The second is unsound, because the same string is drawn by a
+// nametag, a 3D label and the chat alike, so a label's call site could be recorded as a chat one
+// and then have the chat's pen and duplicate filter applied to it.
+//
+// The scope turns it into a fact. CChat::Render is found by its prologue, which occurs exactly
+// once in .text of every client this mod ships for:
+//
+//   0.3.7-R1 0x638A0   0.3.7-R2 0x63970   0.3.7-R3 and R3-1 0x66CF0
+//   0.3.7-R4 0x67430   0.3.7-R5 0x67470   0.3.DL 0x66EE0
+//
+// and its call sites are redirected to a stub that raises a flag for the duration of the call.
+// Inside it text is chat; outside it text is not, whatever it says.
+static volatile LONG g_inChatRender = 0;
+static bool          g_chatRenderHooked = false;
+
+// CChat::Render takes six dwords on the stack and ends with `ret 18h`, so the stub has to accept
+// them and hand the same six back: a stub that pops nothing leaves the caller's stack 24 bytes out
+// of place, which crashes on the first return.
+typedef void(__fastcall* ChatRenderFn)(void* self, void* unused, DWORD a1, DWORD a2, DWORD a3,
+                                       DWORD a4, DWORD a5, DWORD a6);
+static ChatRenderFn g_origChatRender = nullptr;
+
+static void __fastcall ChatRenderStub(void* self, void* unused, DWORD a1, DWORD a2, DWORD a3,
+                                      DWORD a4, DWORD a5, DWORD a6);
+
+// True only while CChat::Render is on the stack. When the prologue was not found this returns
+// false for everything, which leaves the per-build caller windows in charge exactly as before.
+static bool InChatRender() { return g_chatRenderHooked && g_inChatRender != 0; }
+
+static void __fastcall ChatRenderStub(void* self, void* unused, DWORD a1, DWORD a2, DWORD a3,
+                                      DWORD a4, DWORD a5, DWORD a6)
+{
+    ::InterlockedExchange(&g_inChatRender, 1);
+    if (g_origChatRender) g_origChatRender(self, nullptr, a1, a2, a3, a4, a5, a6);
+    ::InterlockedExchange(&g_inChatRender, 0);
+}
+
+bool HookChatRender()
+{
+    if (g_chatRenderHooked) return true;
+    if (!g_sampBase) return false;
+
+    BYTE* text = nullptr;
+    DWORD textSize = 0;
+    if (!GetTextSection((HMODULE)g_sampBase, &text, &textSize)) return false;
+
+    // push ebp / mov ebp,esp / and esp,-8 / sub esp,20Ch / push ebx / mov ebx,ecx
+    static const BYTE kSig[] = { 0x55, 0x8B, 0xEC, 0x83, 0xE4, 0xF8,
+                                 0x81, 0xEC, 0x0C, 0x02, 0x00, 0x00,
+                                 0x53, 0x8B, 0xD9 };
+    static const char* kMask = "xxxxxxxxxxxxxxx";
+    BYTE* target = FindPattern(text, textSize, kSig, kMask, (int)sizeof(kSig));
+    if (!target) {
+        LogW(L"CChat::Render: prologue not found, the chat keeps the per-build caller window");
+        return false;
+    }
+
+    g_origChatRender = (ChatRenderFn)target;
+    int patched = 0;
+    for (BYTE* p = text; p + 5 <= text + textSize; p++) {
+        if (*p != 0xE8) continue;
+        const int rel = *(int*)(p + 1);
+        if (p + 5 + rel != target) continue;
+        ptrdiff_t delta = (BYTE*)&ChatRenderStub - (p + 5);
+        if (delta < INT_MIN || delta > INT_MAX) continue;
+        DWORD old = 0;
+        if (!::VirtualProtect(p + 1, sizeof(int), PAGE_READWRITE, &old)) continue;
+        FreezeThreads();
+        *(int*)(p + 1) = (int)delta;
+        UnfreezeThreads();
+        DWORD tmp = 0;
+        ::VirtualProtect(p + 1, sizeof(int), old, &tmp);
+        patched++;
+    }
+    if (!patched) {
+        LogW(L"CChat::Render: no call site found, the chat keeps the per-build caller window");
+        return false;
+    }
+
+    g_chatRenderHooked = true;
+    LogW(L"CChat::Render scoped at +0x%X, %d call site(s): chat is whatever runs inside it",
+         (unsigned)(target - (BYTE*)g_sampBase), patched);
+    return true;
+}
+
 bool HookDialogOnRender()
 {
     if (g_dlgCallSites || !g_cfg.clientText || !g_sampBase) return g_dlgCallSites != 0;
@@ -2280,13 +2371,6 @@ static bool ChatBodySiteKnown(DWORD rva)
     return false;
 }
 
-static void LearnChatBodySite(DWORD rva)
-{
-    if (rva == 0 || rva == 0xFFFFFFFFu || ChatBodySiteKnown(rva) || g_chatBodySiteCount >= 8)
-        return;
-    g_chatBodySites[g_chatBodySiteCount++] = rva;
-    LogW(L"chat body site learned: +0x%X (%d known)", (unsigned)rva, g_chatBodySiteCount);
-}
 
 static bool ShadowSiteKnown(DWORD rva)
 {
@@ -2684,7 +2768,6 @@ static INT __stdcall WrapperTextBody(void* self, void* sprite, const char* text,
             g_lastShadowText[0] = 0;
             why = L"record consumed";
             ConfirmShadowPasses(plain);
-            LearnChatBodySite(g_wrapperRetRva);
         } else {
             why = (age < 0 || age > 64) ? L"stale record" : L"no match";
         }
@@ -2816,7 +2899,8 @@ static INT __stdcall WrapperDrawTextADetour(void* self, void* sprite, const char
         const BYTE* ret = (const BYTE*)_ReturnAddress();
         const BYTE* base = (const BYTE*)g_sampBase;
         const DWORD rva = base ? (DWORD)(ret - base) : 0xFFFFFFFFu;
-        const bool fromChat = InWindow(g_chatWindow, rva) || ChatBodySiteKnown(rva);
+        const bool fromChat = InChatRender() || InWindow(g_chatWindow, rva) ||
+                              ChatBodySiteKnown(rva);
         ::InterlockedExchange(&g_wrapperChatCall, fromChat ? 1 : 0);
         g_wrapperRetRva = rva;
     }
@@ -3269,7 +3353,7 @@ static int FontTextCommon(bool wide, ID3DXFont* self, ID3DXSprite* sprite, const
     // Measured: the chat's lines come from +0x6722A, its timestamp shadow from +0x66FA7
     // and the death window's name from +0x69F2E.
     const DWORD callerRva = retAddr ? CallerRva(retAddr) : 0xFFFFFFFFu;
-    const bool chatCall  = InWindow(g_chatWindow,  callerRva);
+    const bool chatCall  = InChatRender() || InWindow(g_chatWindow, callerRva);
     const bool deathCall = InWindow(g_deathWindow, callerRva);
 
     // CDeathWindow::DrawText paints four black copies of a name and then the body, and

@@ -221,6 +221,8 @@ static bool TryAttachSamp()
     // Client UI text: probe only for now (logs the rect/format/colour the client
     // itself passes, plus the real font heights from the CFonts object).
     HookClientText();
+    // The chat is recognised by being inside CChat::Render, not by a caller window.
+    HookChatRender();
     HookDialogDraw();
     HookDialogOnRender();
     // CMenu::Show is what tells the takeover that a menu is on screen, so it is

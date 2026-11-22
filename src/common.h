@@ -378,7 +378,9 @@ bool HookTextDraw();
 bool HookGameText();
 bool HookScoreboardDraw();
 bool HookDialogDraw();
-bool HookDialogOnRender();      // CDXUTDialog::OnRender call sites: captions after the batch
+bool HookDialogOnRender();
+bool HookChatRender();   // scopes the chat takeover to CChat::Render
+
 bool HookMenuShow();   // CMenu::Show: tells the takeover a menu is on screen
 
 // font.cpp
