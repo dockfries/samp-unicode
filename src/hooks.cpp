@@ -609,32 +609,52 @@ static bool LooksLikeChatPrefix(const std::wstring& s)
     return last == L':' || last == L']';
 }
 
-static float ChatJoinNextPiece(float x, long top, const std::wstring& piece, int px, int fontId)
+// A chat line reaches this mod as up to three calls - the timestamp, the name and the message -
+// each carrying an x the client measured with its own face. Ours has different advances, so a piece
+// lands where Arial said it should rather than where the previous piece ended.
+//
+// This keeps the client's x for every piece and corrects it by the difference accumulated so far:
+// the previous piece's width as this mod rendered it, minus the advance the client itself used
+// between the two. Nothing is dropped, re-ordered or re-measured beyond that shift, and only the
+// chat is touched - the scope flag decides, so a 3D label or a nametag never goes through it.
+static float ChatOffsetX(long top, float clientX, const std::wstring& text, int px, int fontId)
 {
-    struct Tail { long top; float endX; DWORD tick; bool prefix; };
-    static Tail s_tail = { 0, 0.0f, 0, false };
+    static long         s_top = 0;
+    static float        s_shift = 0.0f;
+    static float        s_prevClientX = 0.0f;
+    static std::wstring s_prevText;
+    static int          s_prevPx = 0;
+    static int          s_prevFont = -1;
+    static bool         s_havePrev = false;
 
-    const DWORD now = ::GetTickCount();
-    const bool fresh = s_tail.tick != 0 && (now - s_tail.tick) < 120;
-    float startX = x;
-    if (fresh && s_tail.prefix && s_tail.top == top && x > s_tail.endX - 3.0f &&
-        x < s_tail.endX + 64.0f) {
-        // The client puts a following piece at (prefix width + 50) while the text starts at 45,
-        // so the gap it draws is five pixels (chatwindow.cpp:519). Joining to our own end and
-        // adding those five reproduces the spacing the client intended.
-        startX = s_tail.endX + 5.0f;
+    const bool newLine = !s_havePrev || top != s_top;
+    if (newLine) {
+        s_top = top;
+        s_shift = 0.0f;
+    } else if (!s_prevText.empty() && clientX > s_prevClientX) {
+        // The client puts its next piece five pixels after what it drew: the timestamp starts at 45
+        // and the message at m_nTimestampWidth + 50, an advance of the timestamp width plus five.
+        // Since the shift only corrects for the width difference, that five cancelled out and the
+        // message ended up flush against the timestamp. Keep it as a floor instead: at least five
+        // pixels after this mod's own glyphs, and never closer than the client would have put it.
+        const float clientAdvance = clientX - s_prevClientX;
+        const int   ours = MeasureTextWidth(s_prevText, s_prevPx, s_prevFont);
+        if (ours > 0) {
+            const float kPieceGap = 5.0f;
+            float advance = (float)ours + kPieceGap;
+            if (clientAdvance > advance) advance = clientAdvance;
+            s_shift += advance - clientAdvance;
+        }
     }
 
-    if (!piece.empty()) {
-        s_tail.tick = now;
-        s_tail.top = top;
-        s_tail.prefix = LooksLikeChatPrefix(piece);
-        const int adv = MeasureTextWidth(piece, px, fontId);
-        s_tail.endX = startX + (float)(adv > 0 ? adv : 0);
-    }
-    return startX;
-}
-// Which hook is drawing, so a doubled line can be traced back to its two sources.
+    const float x = clientX + s_shift;
+    s_prevClientX = clientX;
+    s_prevText    = text;
+    s_prevPx      = px;
+    s_prevFont    = fontId;
+    s_havePrev    = true;
+    return x;
+}// Which hook is drawing, so a doubled line can be traced back to its two sources.
 static const wchar_t* g_drawSource = L"?";
 
 static void TakeOverClientText(int which, void* self, void* sprite, const char* text,
@@ -803,6 +823,11 @@ static void __fastcall ChatRenderStub(void* self, void* unused, DWORD a1, DWORD 
 // True only while CChat::Render is on the stack. When the prologue was not found this returns
 // false for everything, which leaves the per-build caller windows in charge exactly as before.
 static bool InChatRender() { return g_chatRenderHooked && g_inChatRender != 0; }
+
+// Is this call part of the chat? Once CChat::Render is scoped, that scope is the only answer:
+// the per-build caller window and the seeded site table are inferences, and an inference that
+// can be wrong is only worth keeping for a client whose prologue was not found.
+static bool ChatPiece() { return g_chatRenderHooked ? InChatRender() : g_wrapperChatCall != 0; }
 
 static void __fastcall ChatRenderStub(void* self, void* unused, DWORD a1, DWORD a2, DWORD a3,
                                       DWORD a4, DWORD a5, DWORD a6)
@@ -2899,8 +2924,9 @@ static INT __stdcall WrapperDrawTextADetour(void* self, void* sprite, const char
         const BYTE* ret = (const BYTE*)_ReturnAddress();
         const BYTE* base = (const BYTE*)g_sampBase;
         const DWORD rva = base ? (DWORD)(ret - base) : 0xFFFFFFFFu;
-        const bool fromChat = InChatRender() || InWindow(g_chatWindow, rva) ||
-                              ChatBodySiteKnown(rva);
+        const bool fromChat = g_chatRenderHooked
+                                  ? InChatRender()
+                                  : (InWindow(g_chatWindow, rva) || ChatBodySiteKnown(rva));
         ::InterlockedExchange(&g_wrapperChatCall, fromChat ? 1 : 0);
         g_wrapperRetRva = rva;
     }
@@ -3353,7 +3379,8 @@ static int FontTextCommon(bool wide, ID3DXFont* self, ID3DXSprite* sprite, const
     // Measured: the chat's lines come from +0x6722A, its timestamp shadow from +0x66FA7
     // and the death window's name from +0x69F2E.
     const DWORD callerRva = retAddr ? CallerRva(retAddr) : 0xFFFFFFFFu;
-    const bool chatCall  = InChatRender() || InWindow(g_chatWindow, callerRva);
+    const bool chatCall  = g_chatRenderHooked ? InChatRender()
+                                              : InWindow(g_chatWindow, callerRva);
     const bool deathCall = InWindow(g_deathWindow, callerRva);
 
     // CDeathWindow::DrawText paints four black copies of a name and then the body, and
@@ -3672,8 +3699,12 @@ static void TakeOverClientText(int which, void* self, void* sprite, const char* 
             // join used to exist. It cannot be applied to every piece: a colour code in the middle
             // of a sentence also arrives as a second call, and pulling that one back ate the space
             // ("Connected toopen.mp"). Only a timestamp-shaped prefix gets joined.
-            it.x           = ChatJoinNextPiece((float)l, t + (long)(line * lineH),
-                                                    runs[ri].text, px, g_cfg.clientTextChatFont);
+            // The chat keeps the client's x per piece and shifts it by the accumulated difference
+            // between this mod's advances and the client's; anything else uses its x as given.
+            it.x           = ChatPiece()
+                                 ? ChatOffsetX(t + (long)(line * lineH), (float)l, runs[ri].text, px,
+                                               g_cfg.clientTextChatFont)
+                                 : (float)l;
             // The cell this renderer produces carries more space below the ink than the
             // client's does, so a line centred by its cell sits low. Lift the ink a little.
             const int inkLift = (px + 6) / 12;
