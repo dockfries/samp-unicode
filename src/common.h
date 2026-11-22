@@ -178,6 +178,9 @@ struct Config {
     bool  utf8First       = true;       // utf8_first = on
     bool  redrawAscii     = false;      // redraw_ascii = off
     bool  detect          = true;       // detect = on
+    // textdraw_underscore_space = on: TextDraws are often written with "_" where a space was
+    // meant; replaced in TextDraw text only, so chat, dialogs and nicknames keep their underscores.
+    bool  tdUnderscoreSpace = true;
 
     // [debug]
     bool  logEnabled      = true;       // log = on   (master switch for the log file)

@@ -154,6 +154,7 @@ verbose = off
 | `encoding.charset` | `auto` | `auto`、名前(`gbk`、`big5`、`sjis`、`euc-kr`、`cp1251`、`utf-8`、…)または数値。 |
 | `encoding.utf8_first` | `on` | 文字コードより先に厳密な UTF-8 を試します。 |
 | `encoding.redraw_ascii` | `on` | 純粋な ASCII テキストもこちらのレンダラーで描画します。既定で有効なので、すべての文字列が同じ書体・同じ大きさになり、ラテン文字と CJK が混ざる行の途中で字形が変わりません。`off` では英語だけの行をクライアント自身のビットマップフォントに任せます。 |
+| `encoding.textdraw_underscore_space` | `on` | TextDraw は空白の代わりに "_" で書かれることが多く、`Progreso_Premio_V.I.P` や `/TURBO_PARA_ON_OFF` のように表示されます。有効にすると空白として描画します。**TextDraw のテキストのみ**が対象で、チャット・ダイアログ・プレイヤー名のアンダースコアはそのまま残ります。 |
 | `encoding.detect` | `on` | `auto` のとき、CJK/キリル文字の文字コードを検出します。UTF-8 とレガシーコードページの両方で有効なバイトペアは、レガシー CJK として扱われます。 |
 | `debug.log` / `debug.verbose` | `on` / `off` | ログファイル出力の切り替えと、テクスチャーごとの詳細。 |
 

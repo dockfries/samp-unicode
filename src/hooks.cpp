@@ -290,6 +290,12 @@ static void __fastcall TextDrawDetour(void* self, void* unused)
     }
 
     std::wstring w = ToWide(text, len);
+    // A TextDraw is often written with "_" where a space was meant ("Progreso_Premio_V.I.P",    // "/TURBO_PARA_ON_OFF"). Replace it here, in TextDraw text only, so chat lines, dialogs and
+    // player names keep their underscores - those are identifiers, not separators.
+    if (g_cfg.tdUnderscoreSpace) {
+        for (size_t i = 0; i < w.size(); i++)
+            if (w[i] == L'_') w[i] = L' ';
+    }
 
     // The menu title arrives twice: CMenu draws it through its own encoder and the client also
     // hands the same string to a TextDraw. Both are visible, and the TextDraw copy sits where

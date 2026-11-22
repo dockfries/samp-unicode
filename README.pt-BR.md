@@ -171,6 +171,7 @@ verbose = off
 | `encoding.charset` | `auto` | `auto`, um nome (`gbk`, `big5`, `sjis`, `euc-kr`, `cp1251`, `utf-8`, …) ou um número. |
 | `encoding.utf8_first` | `on` | Tenta UTF-8 estrito antes do charset. |
 | `encoding.redraw_ascii` | `on` | Desenhar texto puramente ASCII com o nosso renderizador também. Ligado é o padrão: uma só face e um só tamanho para todas as strings, e uma linha que mistura latim e CJK não muda de forma no meio. `off` deixa as linhas só em inglês para a fonte bitmap do próprio cliente. |
+| `encoding.textdraw_underscore_space` | `on` | TextDraws costumam ser escritos com "_" no lugar de espaço, então a linha aparece como `Progreso_Premio_V.I.P` ou `/TURBO_PARA_ON_OFF`. Ligado desenha um espaço. Apenas texto de TextDraw: chat, diálogos e nomes de jogadores mantêm os sublinhados, porque ali eles fazem parte do nome. |
 | `encoding.detect` | `on` | Com `auto`, detecta codificações CJK/cirílicas. Um par de bytes válido tanto em UTF-8 quanto na codepage legada é considerado CJK legado. |
 | `debug.log` / `debug.verbose` | `on` / `off` | Ativação do arquivo de log e detalhe por textura. |
 

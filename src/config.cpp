@@ -481,6 +481,10 @@ L"; (servers\\127.0.0.1_7777.ini) replaces only the keys it defines. See the REA
     L"; On is the default: one face and one size for every string, so a line that\r\n"
     L"; mixes Latin and CJK does not change shape halfway through.\r\n"
     L"redraw_ascii = on\r\n"
+    L"; TextDraws are often written with \"_\" where a space was meant, so a row reads\r\n"
+    L"; \"Progreso_Premio_V.I.P\". On draws a space instead, in TextDraw text only:\r\n"
+    L"; chat, dialogs and player names keep their underscores.\r\n"
+    L"textdraw_underscore_space = on\r\n"
     L"; With charset = auto, let compact_enc_det guess the encoding. Only\r\n"
     L"; structurally distinctive results (CJK / Cyrillic) are accepted, so\r\n"
     L"; Latin1/ASCII never override the system default.\r\n"
@@ -823,6 +827,8 @@ void LoadConfig()
         g_cfg.utf8First   = ParseBool(IniGetStr(L"encoding.utf8_first", L"on"), true);
         g_cfg.detect      = ParseBool(IniGetStr(L"encoding.detect", L"on"), true);
         g_cfg.redrawAscii = ParseBool(IniGetStr(L"encoding.redraw_ascii", L"on"), true);
+    g_cfg.tdUnderscoreSpace =
+        ParseBool(IniGetStr(L"encoding.textdraw_underscore_space", L"on"), true);
         // Spanish 1252, Polish 1250 and Arabic 1256 reach the client as the ANSI bytes of the
         // machine the server was built on. Every high byte is a letter there, so nothing in the
         // stream identifies the code page; this key chooses who decides.

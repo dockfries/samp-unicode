@@ -164,6 +164,7 @@ verbose = off
 | `encoding.charset` | `auto` | `auto`、名称（`gbk`、`big5`、`sjis`、`euc-kr`、`cp1251`、`utf-8` …）或数字。 |
 | `encoding.utf8_first` | `on` | 先按严格 UTF-8 试。 |
 | `encoding.redraw_ascii` | `on` | 纯 ASCII 文本也交给我们的渲染器。默认开启：所有字符串用同一字体、同一字号，中英混排的行不会中途换形。`off` 时纯英文行仍用客户端自己的位图字体。 |
+| `encoding.textdraw_underscore_space` | `on` | TextDraw 常用 `_` 代替空格，于是显示成 `Progreso_Premio_V.I.P`、`/TURBO_PARA_ON_OFF`。开启后按空格绘制。**只作用于 TextDraw 文本**：聊天、对话框和玩家昵称里的下划线保留，因为那是名字的一部分。 |
 | `encoding.detect` | `on` | `auto` 时自动识别 CJK/西里尔编码。某组字节同时是合法 UTF-8 和合法传统 CJK 时，按传统 CJK 处理。 |
 | `debug.log` / `debug.verbose` | `on` / `off` | 日志开关和逐纹理细节。 |
 

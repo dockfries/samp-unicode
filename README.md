@@ -178,6 +178,7 @@ verbose = off
 | `encoding.utf8_first` | `on` | Try strict UTF-8 before the charset. |
 | `encoding.detect` | `on` | With `auto`, detect CJK/Cyrillic encodings. A byte pair that is valid in both UTF-8 and the legacy codepage is taken as legacy CJK. |
 | `encoding.redraw_ascii` | `on` | Draw pure-ASCII text with our renderer as well. On is the default, so one face and one size covers every string and a line that mixes Latin and CJK does not change shape halfway through. `off` leaves English-only lines to the client's own bitmap font. |
+| `encoding.textdraw_underscore_space` | `on` | TextDraws are often written with "_" where a space was meant, so a row reads `Progreso_Premio_V.I.P` or `/TURBO_PARA_ON_OFF`. On draws a space instead. TextDraw text only: chat lines, dialogs and player nicknames keep their underscores, because there they are part of a name. |
 | `debug.log` / `debug.verbose` | `on` / `off` | Log file switch and per-texture detail. |
 
 `auto` means the player's Windows ANSI code page, so `欢迎来到服务器` (GBK),
